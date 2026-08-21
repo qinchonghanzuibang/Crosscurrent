@@ -42,11 +42,54 @@ public struct BrowserPageSnapshot: Codable, Hashable, Sendable {
     }
 }
 
+public enum BrowserPlatformCaptureKind: String, Codable, Sendable {
+    case discovery, listing, detail, pagination, deletion, sessionExpiry, reconnect
+}
+
+public struct BrowserPlatformCaptureRequest: Codable, Hashable, Sendable {
+    public var schemaVersion: Int
+    public var platform: AuthenticatedCreatorPlatform
+    public var accountID: ConnectorAccountID
+    public var url: URL
+    public var kind: BrowserPlatformCaptureKind
+
+    public init(schemaVersion: Int = 1, platform: AuthenticatedCreatorPlatform, accountID: ConnectorAccountID, url: URL, kind: BrowserPlatformCaptureKind) {
+        self.schemaVersion = schemaVersion
+        self.platform = platform
+        self.accountID = accountID
+        self.url = url
+        self.kind = kind
+    }
+}
+
+public struct BrowserPlatformCaptureFixture: Codable, Hashable, Sendable {
+    public var schemaVersion: Int
+    public var platform: AuthenticatedCreatorPlatform
+    public var kind: BrowserPlatformCaptureKind
+    public var finalURLWithoutQuery: URL
+    public var title: String
+    public var topLevelElementCounts: [String: Int]
+    public var resourceOrigins: [String]
+    public var capturedAt: Date
+
+    public init(schemaVersion: Int, platform: AuthenticatedCreatorPlatform, kind: BrowserPlatformCaptureKind, finalURLWithoutQuery: URL, title: String, topLevelElementCounts: [String: Int], resourceOrigins: [String], capturedAt: Date = .now) {
+        self.schemaVersion = schemaVersion
+        self.platform = platform
+        self.kind = kind
+        self.finalURLWithoutQuery = finalURLWithoutQuery
+        self.title = title
+        self.topLevelElementCounts = topLevelElementCounts
+        self.resourceOrigins = resourceOrigins
+        self.capturedAt = capturedAt
+    }
+}
+
 public enum BrowserWorkerRequest: Codable, Hashable, Sendable {
     case navigate(BrowserNavigationRequest)
     case authenticate(platform: AuthenticatedCreatorPlatform, accountID: ConnectorAccountID, presentsWindow: Bool)
     case discover(BrowserCreatorDiscoveryRequest)
     case refresh(BrowserCreatorRefreshRequest)
+    case capture(BrowserPlatformCaptureRequest)
     case health(platform: AuthenticatedCreatorPlatform, accountID: ConnectorAccountID?)
     case disconnect(platform: AuthenticatedCreatorPlatform, accountID: ConnectorAccountID)
 }
@@ -55,6 +98,7 @@ public enum BrowserWorkerResponse: Codable, Hashable, Sendable {
     case page(BrowserPageSnapshot)
     case creatorIdentity(BrowserCreatorIdentity)
     case refreshPage(ConnectorRefreshPage)
+    case captureFixture(BrowserPlatformCaptureFixture)
     case health(ConnectorHealth)
     case acknowledged
 }

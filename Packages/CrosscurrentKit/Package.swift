@@ -86,7 +86,7 @@ let package = Package(
             .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
         ]),
         .target(name: "CrosscurrentEmbeddingORT", dependencies: [
-            "CrosscurrentEmbeddingQualification",
+            "CrosscurrentEmbeddingQualification", "CrosscurrentSearch",
             .product(name: "Hub", package: "swift-transformers"),
             .product(name: "Tokenizers", package: "swift-transformers"),
         ]),

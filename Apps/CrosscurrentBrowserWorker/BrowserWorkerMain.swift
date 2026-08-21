@@ -80,6 +80,46 @@ final class BrowserControlService: NSObject, CrosscurrentXPCService, @unchecked 
             let navigation = BrowserNavigationRequest(profileID: refresh.accountID.rawValue, url: refresh.profileURL)
             let webView = try await owner.navigate(navigation, profileName: refresh.platform.rawValue)
             return .refreshPage(try await BrowserCreatorDOMExtractor.refresh(platform: refresh.platform, cursor: refresh.cursor, in: webView))
+        case let .capture(capture):
+            let navigation = BrowserNavigationRequest(profileID: capture.accountID.rawValue, url: capture.url)
+            let webView = try await owner.navigate(navigation, profileName: capture.platform.rawValue)
+            let value = try await webView.callAsyncJavaScript(
+                """
+                const counts = {};
+                for (const child of document.body?.children || []) {
+                  const tag = String(child.tagName || '').toLowerCase();
+                  if (tag) counts[tag] = (counts[tag] || 0) + 1;
+                }
+                const origins = [...new Set(performance.getEntriesByType('resource').map(entry => {
+                  try { return new URL(entry.name).origin; } catch (_) { return null; }
+                }).filter(Boolean))].sort().slice(0, 100);
+                return JSON.stringify({counts, origins});
+                """,
+                arguments: [:],
+                in: nil,
+                contentWorld: .world(name: "CrosscurrentCapture")
+            )
+            guard let json = value as? String,
+                  let data = json.data(using: .utf8),
+                  let shape = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { throw BrowserWorkerError.invalidResult }
+            var safeComponents = URLComponents(url: webView.url ?? capture.url, resolvingAgainstBaseURL: false)
+            safeComponents?.query = nil
+            safeComponents?.fragment = nil
+            guard let safeURL = safeComponents?.url else { throw BrowserWorkerError.invalidResult }
+            let rawCounts = shape["counts"] as? [String: Any] ?? [:]
+            let counts = rawCounts.compactMapValues { ($0 as? NSNumber)?.intValue }
+            let origins = (shape["origins"] as? [String] ?? []).filter { $0.hasPrefix("https://") }
+            return .captureFixture(BrowserPlatformCaptureFixture(
+                schemaVersion: capture.schemaVersion,
+                platform: capture.platform,
+                kind: capture.kind,
+                finalURLWithoutQuery: safeURL,
+                title: webView.title ?? "",
+                topLevelElementCounts: counts,
+                resourceOrigins: origins,
+                capturedAt: .now
+            ))
         case let .health(_, accountID):
             guard let accountID else { return .health(.authenticationRequired) }
             return .health(owner.health(profileID: accountID.rawValue))

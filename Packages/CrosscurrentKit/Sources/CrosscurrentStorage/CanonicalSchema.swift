@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 enum CanonicalSchema {
-    static let version = 5
+    static let version = 6
 
     static func migrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -38,6 +38,13 @@ enum CanonicalSchema {
             try db.execute(sql: "DELETE FROM topic_aliases WHERE id NOT IN (SELECT MIN(id) FROM topic_aliases GROUP BY normalized_name)")
             try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS topic_aliases_normalized ON topic_aliases(normalized_name)")
             try db.execute(sql: "PRAGMA user_version = 5")
+        }
+        migrator.registerMigration("canonical-v6-provider-health") { db in
+            try db.execute(sql: "ALTER TABLE provider_configs ADD COLUMN health TEXT NOT NULL DEFAULT 'unknown'")
+            try db.execute(sql: "ALTER TABLE provider_configs ADD COLUMN last_checked_at REAL")
+            try db.execute(sql: "ALTER TABLE provider_configs ADD COLUMN last_error TEXT")
+            try db.execute(sql: "ALTER TABLE provider_configs ADD COLUMN retry_at REAL")
+            try db.execute(sql: "PRAGMA user_version = 6")
         }
         return migrator
     }

@@ -190,3 +190,5 @@
 "Global-focused" = "全球信息生态";
 "Mixed coverage" = "混合信息生态";
 "Unknown coverage" = "信息生态未知";
+"No Event currently meets the evidence and relevance bar for the top five. The remaining briefing stays available below." = "目前没有事件同时达到前五所需的证据与相关性标准，其余简报内容仍显示在下方。";
+"Added %lld starter Sources; %lld need attention." = "已添加 %lld 个起始来源；%lld 个需要处理。";

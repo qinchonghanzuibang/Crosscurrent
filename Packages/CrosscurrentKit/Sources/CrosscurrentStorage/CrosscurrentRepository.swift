@@ -1604,7 +1604,11 @@ public actor CrosscurrentRepository {
                     displayName: row["display_name"],
                     keychainReference: row["keychain_reference"],
                     enabled: row["enabled"],
-                    configuration: row["configuration_json"]
+                    configuration: row["configuration_json"],
+                    health: row["health"],
+                    lastCheckedAt: (row["last_checked_at"] as Double?).map { Date(timeIntervalSince1970: $0) },
+                    lastError: row["last_error"],
+                    retryAt: (row["retry_at"] as Double?).map { Date(timeIntervalSince1970: $0) }
                 )
             }
         }
@@ -1759,10 +1763,21 @@ public actor CrosscurrentRepository {
     public func saveProviderConfiguration(_ configuration: ProviderConfigurationRecord) throws -> Bool {
         try mutate(domains: [.accounts]) { db in
             try db.execute(
-                sql: "INSERT INTO provider_configs (id, provider_kind, display_name, keychain_reference, enabled, configuration_json) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET provider_kind=excluded.provider_kind, display_name=excluded.display_name, keychain_reference=excluded.keychain_reference, enabled=excluded.enabled, configuration_json=excluded.configuration_json",
-                arguments: [configuration.id, configuration.kind, configuration.displayName, configuration.keychainReference, configuration.enabled, configuration.configuration]
+                sql: "INSERT INTO provider_configs (id, provider_kind, display_name, keychain_reference, enabled, configuration_json, health, last_checked_at, last_error, retry_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET provider_kind=excluded.provider_kind, display_name=excluded.display_name, keychain_reference=excluded.keychain_reference, enabled=excluded.enabled, configuration_json=excluded.configuration_json, health=excluded.health, last_checked_at=excluded.last_checked_at, last_error=excluded.last_error, retry_at=excluded.retry_at",
+                arguments: [configuration.id, configuration.kind, configuration.displayName, configuration.keychainReference, configuration.enabled, configuration.configuration, configuration.health, configuration.lastCheckedAt?.timeIntervalSince1970, configuration.lastError, configuration.retryAt?.timeIntervalSince1970]
             )
         }
+    }
+
+    @discardableResult
+    public func recordProviderHealth(id: String, healthy: Bool, error: String? = nil, checkedAt: Date = .now, retryAt: Date? = nil) throws -> Bool {
+        try mutateValue(domains: [.accounts]) { db in
+            try db.execute(
+                sql: "UPDATE provider_configs SET health=?, last_checked_at=?, last_error=?, retry_at=? WHERE id=?",
+                arguments: [healthy ? "healthy" : "failed", checkedAt.timeIntervalSince1970, error, retryAt?.timeIntervalSince1970, id]
+            )
+            return db.changesCount > 0
+        } ?? false
     }
 
     public func activeConstraints() throws -> [ClusteringConstraint] {
@@ -1942,6 +1957,74 @@ public actor CrosscurrentRepository {
                 contentPrivacy: privacy,
                 health: health,
                 lastSuccessfulSync: (row["last_successful_sync"] as Double?).map(Date.init(timeIntervalSince1970:))
+            )
+        }
+    }
+
+    public func sourceEndpointHealth() throws -> [StoredEndpointHealth] {
+        try database.pool.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT e.id, e.health, e.last_successful_sync,
+                       (SELECT MAX(started_at) FROM sync_runs r WHERE r.endpoint_id=e.id) AS last_attempt,
+                       (SELECT MAX(completed_at) FROM sync_runs r WHERE r.endpoint_id=e.id AND r.error_class IS NOT NULL) AS last_failure,
+                       (SELECT h.message FROM connector_health_events h
+                        WHERE h.endpoint_id=e.id AND h.health != 'healthy'
+                        ORDER BY h.observed_at DESC LIMIT 1) AS failure_message,
+                       (SELECT MIN(j.next_attempt_at) FROM jobs j
+                        WHERE j.kind='refresh' AND j.input_hash=e.id AND j.state IN ('pending','failed')) AS next_retry,
+                       (SELECT cursor_family FROM sync_cursors c WHERE c.endpoint_id=e.id) AS cursor_family,
+                       (SELECT COUNT(*) FROM items i WHERE i.endpoint_id=e.id) AS item_count
+                FROM source_endpoints e
+                ORDER BY e.id
+                """)
+            return try rows.map { row in
+                guard let endpointID = Self.identifier(SourceEndpointID.self, row["id"]),
+                      let health = ConnectorHealth(rawValue: row["health"])
+                else { throw CrosscurrentStorageError.corruptRecord("StoredEndpointHealth") }
+                return StoredEndpointHealth(
+                    endpointID: endpointID,
+                    health: health,
+                    lastSuccess: (row["last_successful_sync"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                    lastAttempt: (row["last_attempt"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                    lastFailure: (row["last_failure"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                    lastFailureMessage: row["failure_message"],
+                    nextRetry: (row["next_retry"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                    cursorFamily: row["cursor_family"],
+                    itemCount: row["item_count"]
+                )
+            }
+        }
+    }
+
+    public func itemDetail(itemID: ItemID, revisionID: String? = nil) throws -> StoredItemDetail? {
+        try database.pool.read { db -> StoredItemDetail? in
+            let row = try Row.fetchOne(db, sql: """
+                SELECT i.id, i.current_revision_id, i.canonical_key, ir.id AS revision_id,
+                       ir.title, ir.author, ir.plain_text, ir.published_at, sr.display_name, ep.account_id
+                FROM items i
+                JOIN item_revisions ir ON ir.item_id=i.id
+                JOIN source_endpoints ep ON ep.id=i.endpoint_id
+                JOIN source_revisions sr ON sr.id=(SELECT current_revision_id FROM sources WHERE id=i.source_id)
+                WHERE i.id=? AND ir.id=COALESCE(?, i.current_revision_id)
+                LIMIT 1
+                """, arguments: [itemID.description, revisionID])
+            guard let row,
+                  let resolvedItemID = Self.identifier(ItemID.self, row["id"]),
+                  let resolvedRevisionID = Self.identifier(ItemRevisionID.self, row["revision_id"])
+            else { return nil }
+            let currentRevision: String = row["current_revision_id"]
+            let canonical: String = row["canonical_key"]
+            return StoredItemDetail(
+                id: resolvedItemID,
+                revisionID: resolvedRevisionID,
+                title: row["title"],
+                author: row["author"],
+                sourceName: row["display_name"],
+                text: row["plain_text"],
+                canonicalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
+                originalAccountID: Self.identifier(ConnectorAccountID.self, row["account_id"] as String?),
+                publishedAt: (row["published_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                isHistorical: currentRevision != resolvedRevisionID.description
             )
         }
     }

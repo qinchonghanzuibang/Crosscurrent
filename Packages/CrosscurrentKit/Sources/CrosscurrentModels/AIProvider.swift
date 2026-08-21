@@ -10,6 +10,10 @@ public struct AIProviderCapabilities: OptionSet, Codable, Hashable, Sendable {
     public static let local = Self(rawValue: 1 << 3)
 }
 
+public enum AIProviderRouteRole: String, Codable, CaseIterable, Sendable {
+    case fast, reasoning
+}
+
 public struct AIRequest: Codable, Hashable, Sendable {
     public var task: AITask
     public var model: String
@@ -47,6 +51,7 @@ public enum AIProviderError: LocalizedError, Equatable {
     case policyDenied
     case invalidResponse
     case httpStatus(Int)
+    case insecureEndpoint
 
     public var errorDescription: String? {
         switch self {
@@ -54,7 +59,20 @@ public enum AIProviderError: LocalizedError, Equatable {
         case .policyDenied: "The content privacy policy does not permit this provider request."
         case .invalidResponse: "The AI provider returned an invalid response."
         case let .httpStatus(code): "The AI provider returned HTTP \(code)."
+        case .insecureEndpoint: "Cloud AI endpoints require HTTPS; HTTP is allowed only for loopback local services."
         }
+    }
+}
+
+public enum AIEndpointSecurity {
+    public static func validate(_ endpoint: URL) throws {
+        if endpoint.scheme?.lowercased() == "https" { return }
+        let host = endpoint.host?.lowercased()
+        if endpoint.scheme?.lowercased() == "http",
+           host == "localhost" || host == "127.0.0.1" || host == "::1" {
+            return
+        }
+        throw AIProviderError.insecureEndpoint
     }
 }
 

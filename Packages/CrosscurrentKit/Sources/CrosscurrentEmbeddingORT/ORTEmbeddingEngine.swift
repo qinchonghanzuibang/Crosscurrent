@@ -1,7 +1,10 @@
 import CrosscurrentEmbeddingQualification
+import CrosscurrentDomain
+import CryptoKit
 import Darwin
 import Foundation
 import Hub
+import CrosscurrentSearch
 import Tokenizers
 
 public actor ORTEmbeddingEngine: QualificationEmbeddingEngine {
@@ -157,6 +160,96 @@ public actor ORTEmbeddingEngine: QualificationEmbeddingEngine {
             throw EmbeddingQualificationError.invalidVector("Missing qualification shim symbol \(name)")
         }
         return unsafeBitCast(value, to: T.self)
+    }
+}
+
+/// The evidence-selected development runtime. It remains dynamically described
+/// and loads only from a checksum-verified managed asset directory.
+public actor SelectedORTEmbeddingRuntime: EmbeddingRuntime {
+    private struct InstalledArtifactManifest: Decodable {
+        struct Artifact: Decodable {
+            var destination: String
+            var bytes: Int64
+            var sha256: String
+        }
+
+        var candidateID: String
+        var model: String
+        var modelRevision: String
+        var license: String
+        var artifacts: [Artifact]
+    }
+
+    public nonisolated let descriptor = EmbeddingDescriptor(
+        runtimeID: "onnxruntime-cpu-1.29.0",
+        modelID: "intfloat/multilingual-e5-small",
+        modelRevision: "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        dimension: 384,
+        scalarType: .float32,
+        pooling: "attention-mask mean pooling",
+        normalization: "l2",
+        queryPrefix: "query: ",
+        documentPrefix: "passage: "
+    )
+
+    private let engine: ORTEmbeddingEngine
+
+    public init(verifiedAssetDirectory: URL) throws {
+        try Self.validateInstalledAsset(at: verifiedAssetDirectory)
+        engine = try ORTEmbeddingEngine(modelDirectory: verifiedAssetDirectory, provider: .cpu)
+    }
+
+    public func embed(_ texts: [String], kind: EmbeddingInputKind) async throws -> [[Float]] {
+        try await engine.embed(texts, role: kind == .query ? .query : .passage)
+    }
+
+    public func resourceEstimate(batchSize: Int) -> EmbeddingResourceEstimate {
+        // Evidence from Qualification/embedding-selection.v1.json. This is a
+        // scheduling estimate, never a qualification hard gate.
+        EmbeddingResourceEstimate(
+            peakBytes: 1_541_275_648,
+            seconds: max(0.05, Double(max(1, batchSize)) / 25.13)
+        )
+    }
+
+    private static func validateInstalledAsset(at directory: URL) throws {
+        let manifestURL = directory.appending(path: "artifact-manifest.json")
+        let manifest = try JSONDecoder().decode(InstalledArtifactManifest.self, from: Data(contentsOf: manifestURL))
+        guard manifest.candidateID == "multilingual-e5-small-ort-cpu",
+              manifest.model == "intfloat/multilingual-e5-small",
+              manifest.modelRevision == "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+              manifest.license == "MIT",
+              !manifest.artifacts.isEmpty
+        else {
+            throw EmbeddingQualificationError.invalidVector("The installed artifact manifest does not describe the evidence-selected model/runtime pair.")
+        }
+        let root = directory.standardizedFileURL.path + "/"
+        for artifact in manifest.artifacts {
+            let url = directory.appending(path: artifact.destination).standardizedFileURL
+            guard url.path.hasPrefix(root), FileManager.default.fileExists(atPath: url.path) else {
+                throw EmbeddingQualificationError.invalidVector("Missing managed artifact \(artifact.destination).")
+            }
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            guard (attributes[.size] as? NSNumber)?.int64Value == artifact.bytes,
+                  try sha256(url) == artifact.sha256.lowercased()
+            else {
+                throw EmbeddingQualificationError.invalidVector("Checksum or size mismatch for managed artifact \(artifact.destination).")
+            }
+        }
+        for relativePath in [
+            "runtime/onnxruntime-osx-arm64-1.29.0/lib/libonnxruntime.1.29.0.dylib",
+            "runtime/libcrosscurrent_ort_qualification.dylib",
+        ] where !FileManager.default.fileExists(atPath: directory.appending(path: relativePath).path) {
+            throw EmbeddingQualificationError.invalidVector("The verified development artifact is not prepared for local execution: missing \(relativePath).")
+        }
+    }
+
+    private static func sha256(_ url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hash = SHA256()
+        while let data = try handle.read(upToCount: 4 * 1_024 * 1_024), !data.isEmpty { hash.update(data: data) }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 

@@ -498,6 +498,19 @@ public struct StoredSearchDocument: Codable, Hashable, Sendable {
     }
 }
 
+public struct StoredItemDetail: Identifiable, Codable, Hashable, Sendable {
+    public var id: ItemID
+    public var revisionID: ItemRevisionID
+    public var title: String
+    public var author: String?
+    public var sourceName: String
+    public var text: String
+    public var canonicalURL: URL?
+    public var originalAccountID: ConnectorAccountID?
+    public var publishedAt: Date?
+    public var isHistorical: Bool
+}
+
 public struct ProviderConfigurationRecord: Identifiable, Codable, Hashable, Sendable {
     public var id: String
     public var kind: String
@@ -505,14 +518,22 @@ public struct ProviderConfigurationRecord: Identifiable, Codable, Hashable, Send
     public var keychainReference: Data?
     public var enabled: Bool
     public var configuration: Data
+    public var health: String
+    public var lastCheckedAt: Date?
+    public var lastError: String?
+    public var retryAt: Date?
 
-    public init(id: String, kind: String, displayName: String, keychainReference: Data?, enabled: Bool = true, configuration: Data) {
+    public init(id: String, kind: String, displayName: String, keychainReference: Data?, enabled: Bool = true, configuration: Data, health: String = "unknown", lastCheckedAt: Date? = nil, lastError: String? = nil, retryAt: Date? = nil) {
         self.id = id
         self.kind = kind
         self.displayName = displayName
         self.keychainReference = keychainReference
         self.enabled = enabled
         self.configuration = configuration
+        self.health = health
+        self.lastCheckedAt = lastCheckedAt
+        self.lastError = lastError
+        self.retryAt = retryAt
     }
 }
 
@@ -523,6 +544,19 @@ public struct StoredSourceSnapshot: Identifiable, Codable, Hashable, Sendable {
     public var endpoints: [SourceEndpoint]
     public var aiClassification: SourceAIClassification?
     public var coverage: SourceCoverageAssertion?
+}
+
+public struct StoredEndpointHealth: Identifiable, Codable, Hashable, Sendable {
+    public var id: SourceEndpointID { endpointID }
+    public var endpointID: SourceEndpointID
+    public var health: ConnectorHealth
+    public var lastSuccess: Date?
+    public var lastAttempt: Date?
+    public var lastFailure: Date?
+    public var lastFailureMessage: String?
+    public var nextRetry: Date?
+    public var cursorFamily: String?
+    public var itemCount: Int
 }
 
 public struct StoredSourceFolderSnapshot: Identifiable, Codable, Hashable, Sendable {

@@ -28,7 +28,7 @@ struct SearchScreen: View {
                 ContentUnavailableView.search(text: query)
             } else {
                 List(results) { result in
-                    Button { open(result) } label: {
+                    Button { Task { await model.openSearchResult(result) } } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(result.title).font(.headline)
                             Text(result.snippet).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
@@ -59,13 +59,6 @@ struct SearchScreen: View {
         }
     }
 
-    private func open(_ result: SearchResult) {
-        guard result.kind == .event,
-              let uuid = UUID(uuidString: result.stableID),
-              let event = model.events.first(where: { $0.id == EventID(uuid) })
-        else { return }
-        model.open(event)
-    }
 }
 
 private struct SearchTaskKey: Hashable {

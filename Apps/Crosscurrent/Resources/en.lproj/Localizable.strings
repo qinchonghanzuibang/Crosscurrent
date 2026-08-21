@@ -190,3 +190,5 @@
 "Global-focused" = "Global-focused";
 "Mixed coverage" = "Mixed coverage";
 "Unknown coverage" = "Unknown coverage";
+"No Event currently meets the evidence and relevance bar for the top five. The remaining briefing stays available below." = "No Event currently meets the evidence and relevance bar for the top five. The remaining briefing stays available below.";
+"Added %lld starter Sources; %lld need attention." = "Added %lld starter Sources; %lld need attention.";

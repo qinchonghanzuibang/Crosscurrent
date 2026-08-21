@@ -2,7 +2,7 @@ import CrosscurrentDesignSystem
 import SwiftUI
 
 enum SidebarDestination: String, CaseIterable, Identifiable {
-    case today, flow, sources, people, topics, saved, search, eventDetail
+    case today, flow, sources, people, topics, saved, search, eventDetail, itemDetail
     var id: String { rawValue }
     var title: LocalizedStringKey {
         switch self {
@@ -14,6 +14,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         case .saved: "Saved"
         case .search: "Search"
         case .eventDetail: "Event"
+        case .itemDetail: "Item"
         }
     }
     var symbol: String {
@@ -26,6 +27,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         case .saved: "bookmark"
         case .search: "magnifyingglass"
         case .eventDetail: "doc.text.magnifyingglass"
+        case .itemDetail: "doc.richtext"
         }
     }
 }
@@ -81,6 +83,7 @@ struct RootView: View {
         case .saved: SavedView()
         case .search: SearchScreen()
         case .eventDetail: EventDetailView()
+        case .itemDetail: ItemDetailView()
         }
     }
 }

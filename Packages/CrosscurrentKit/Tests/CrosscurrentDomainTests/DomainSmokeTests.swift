@@ -13,6 +13,15 @@ import Testing
     #expect(BundledPromptCatalog.all.allSatisfy { $0.revision.origin == .bundled })
 }
 
+@Test func aiEndpointsRequireHTTPSExceptForLoopbackServices() throws {
+    try AIEndpointSecurity.validate(#require(URL(string: "https://api.example.com/v1/messages")))
+    try AIEndpointSecurity.validate(#require(URL(string: "http://127.0.0.1:11434/api/chat")))
+    try AIEndpointSecurity.validate(#require(URL(string: "http://localhost:8080/v1/chat/completions")))
+    #expect(throws: AIProviderError.insecureEndpoint) {
+        try AIEndpointSecurity.validate(#require(URL(string: "http://api.example.com/v1/messages")))
+    }
+}
+
 @Test func ordinaryPageEditsPreserveSegmentLineageButReplacementDoesNot() {
     let oldRevision = ItemRevision(itemID: ItemID(), title: "Monitored page", text: "A monitored paragraph contains durable evidence for readers.", contentHash: "old")
     let old = ItemSegmenter.segments(for: oldRevision)
@@ -146,4 +155,52 @@ import Testing
 
     let reopened = try USearchVectorIndex(rootDirectory: root, descriptor: descriptor)
     #expect(try await reopened.search(vector: [0, 1, 0], limit: 1).first?.id == "beta")
+}
+
+private actor FixtureEmbeddingRuntime: EmbeddingRuntime {
+    let descriptor = EmbeddingDescriptor(runtimeID: "fixture-runtime", modelID: "fixture-model", modelRevision: "1", dimension: 3, scalarType: .float32, pooling: "fixture", normalization: "l2")
+    private var fails = false
+
+    func setFails(_ value: Bool) { fails = value }
+    func embed(_ texts: [String], kind _: EmbeddingInputKind) throws -> [[Float]] {
+        if fails { throw CocoaError(.fileReadCorruptFile) }
+        return texts.map { text in
+            let value = text.lowercased()
+            if value.contains("beta") { return [0, 1, 0] }
+            if value.contains("alpha") { return [1, 0, 0] }
+            return [0, 0, 1]
+        }
+    }
+    func resourceEstimate(batchSize: Int) -> EmbeddingResourceEstimate {
+        EmbeddingResourceEstimate(peakBytes: Int64(batchSize * 12), seconds: 0)
+    }
+}
+
+@Test func semanticRebuildSwitchesOnlyAfterTheCompleteNamespacePersists() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentSemanticCoordinatorTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let locations = DatabaseLocations(container: root)
+    let database = try CrosscurrentDatabase.open(at: locations, role: .mainApp)
+    let repository = CrosscurrentRepository(database: database, writerInstance: "semantic-test")
+    let sourceRevision = SourceRevision(sourceID: SourceID(), displayName: "Fixture Source")
+    let source = LogicalSource(id: sourceRevision.sourceID, currentRevisionID: sourceRevision.id, kind: .publication)
+    let endpoint = SourceEndpoint(sourceID: source.id, connector: .rss, externalID: "fixture")
+    _ = try await repository.saveSource(source, revision: sourceRevision, endpoints: [endpoint])
+
+    let itemRevision = ItemRevision(itemID: ItemID(), title: "Beta release", text: "Beta runtime evidence", contentHash: "beta")
+    let item = Item(id: itemRevision.itemID, sourceID: source.id, sourceEndpointID: endpoint.id, externalID: "beta", currentRevisionID: itemRevision.id)
+    let segment = ItemSegment(itemRevisionID: itemRevision.id, kind: .whole, span: TextSpan(utf8Start: 0, utf8Length: itemRevision.text.utf8.count, excerptHash: "beta"), text: itemRevision.text, contentHash: "beta")
+    _ = try await repository.saveItem(item, revision: itemRevision, segments: [segment])
+
+    let runtime = FixtureEmbeddingRuntime()
+    let coordinator = SemanticIndexCoordinator(repository: repository, runtime: runtime, rootDirectory: locations.derivedSearch.appending(path: "Semantic"))
+    let update = try await coordinator.rebuild()
+    #expect(update.documentCount >= 2)
+    #expect(try await coordinator.search("beta", limit: 1).first?.id == "item:\(item.id.description)")
+    let manifestURL = locations.derivedSearch.appending(path: "Semantic/active-vector-namespace.json")
+    let activeBeforeFailure = try Data(contentsOf: manifestURL)
+
+    await runtime.setFails(true)
+    await #expect(throws: (any Error).self) { try await coordinator.rebuild() }
+    #expect(try Data(contentsOf: manifestURL) == activeBeforeFailure)
 }

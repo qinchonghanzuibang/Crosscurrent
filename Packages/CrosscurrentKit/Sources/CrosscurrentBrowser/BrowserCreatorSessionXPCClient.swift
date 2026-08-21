@@ -55,6 +55,13 @@ public actor BrowserCreatorSessionXPCClient: BrowserCreatorSessionClient {
         return page
     }
 
+    public func capture(_ requestValue: BrowserPlatformCaptureRequest) async throws -> BrowserPlatformCaptureFixture {
+        let key = "browser-capture:\(requestValue.schemaVersion):\(requestValue.platform.rawValue):\(requestValue.kind.rawValue):\(requestValue.accountID)"
+        let response = try await request(.capture(requestValue), key: key)
+        guard case let .captureFixture(fixture) = response else { throw BrowserWorkerError.invalidResult }
+        return fixture
+    }
+
     private func request(_ request: BrowserWorkerRequest, key: String) async throws -> BrowserWorkerResponse {
         try await client.send(request, messageType: .browserRequest, response: BrowserWorkerResponse.self, idempotencyKey: key)
     }

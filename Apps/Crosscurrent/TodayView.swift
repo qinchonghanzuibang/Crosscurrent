@@ -10,7 +10,6 @@ struct TodayView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
                 masthead
-                if !model.providerConfigured { ProviderFreeBanner() }
                 if model.events.isEmpty {
                     VStack(spacing: 14) {
                         ContentUnavailableView(
@@ -26,10 +25,17 @@ struct TodayView: View {
                 } else {
                     let lead = section(.today)
                     SectionRule("5 things worth knowing", trailing: Self.leadEventCount(lead.count))
-                    ForEach(Array(lead.enumerated()), id: \.element.id) { index, event in
-                        TodayEventCard(event: event, index: index + 1) { model.open(event) }
-                            .accessibilityIdentifier("today-event-\(event.id.description)")
-                        if index < lead.count - 1 { Divider() }
+                    if lead.isEmpty {
+                        Text("No Event currently meets the evidence and relevance bar for the top five. The remaining briefing stays available below.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 8)
+                    } else {
+                        ForEach(Array(lead.enumerated()), id: \.element.id) { index, event in
+                            TodayEventCard(event: event, index: index + 1) { model.open(event) }
+                                .accessibilityIdentifier("today-event-\(event.id.description)")
+                            if index < lead.count - 1 { Divider() }
+                        }
                     }
                     optionalSection("Emerging", events: section(.emerging))
                     optionalSection("From People You Follow", events: section(.peopleYouFollow))
@@ -62,6 +68,9 @@ struct TodayView: View {
                 VStack(alignment: .trailing, spacing: 3) {
                     Text(model.digestRevisionReason == .initialDaily ? "Daily snapshot" : "Updated briefing").font(.subheadline.weight(.semibold))
                     Text(model.digestUpdatedAt.formatted(date: .omitted, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                    if !model.providerConfigured {
+                        Label("Local briefing", systemImage: "cpu").font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
             Rectangle().frame(height: 3).foregroundStyle(CrosscurrentColor.ink)
@@ -95,11 +104,7 @@ struct TodayView: View {
     }
 
     private func section(_ section: DigestSection) -> [EventCardModel] {
-        if let values = model.digestSections[section] { return values }
-        #if DEBUG
-        if section == .today { return Array(model.events.prefix(5)) }
-        #endif
-        return []
+        model.digestSections[section] ?? []
     }
 
     private static func leadEventCount(_ count: Int) -> String {
@@ -120,8 +125,19 @@ private struct TodayEventCard: View {
                         EventReadMarker(event.readStatus)
                         Text(event.topics.first ?? "Event").font(.caption.weight(.semibold)).foregroundStyle(CrosscurrentColor.accent)
                     }
-                    Text(event.title).font(.system(size: 25, weight: .bold, design: .serif)).tracking(-0.35).multilineTextAlignment(.leading).foregroundStyle(.primary)
-                    Text(event.summary).font(.body).foregroundStyle(.secondary).lineSpacing(3).multilineTextAlignment(.leading)
+                    Text(event.title)
+                        .font(.system(size: 25, weight: .bold, design: .serif))
+                        .tracking(-0.35)
+                        .lineLimit(3)
+                        .minimumScaleFactor(0.82)
+                        .multilineTextAlignment(.leading)
+                        .foregroundStyle(.primary)
+                    Text(event.summary)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(3)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
                     HStack(spacing: 9) {
                         SourceMonogram(event.primarySource, size: 24)
                         Text(event.primarySource).font(.caption.weight(.semibold))
@@ -140,19 +156,4 @@ private struct TodayEventCard: View {
         String.localizedStringWithFormat(String(localized: "%lld independent · %lld sources"), independent, total)
     }
 
-}
-
-struct ProviderFreeBanner: View {
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "cpu").font(.title3).foregroundStyle(CrosscurrentColor.accent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Local briefing mode").font(.subheadline.weight(.semibold))
-                Text("Ingestion, clustering, ranking, search, and cited extractive summaries remain active. Configure an AI provider for generative actions.").font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button("Configure") { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) }
-        }
-        .padding(14).background(CrosscurrentColor.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
-    }
 }
