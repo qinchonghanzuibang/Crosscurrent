@@ -1,0 +1,58 @@
+FeedFlow third-party notices
+============================
+
+This source tree pins the following shipped dependencies. Release automation
+must verify this inventory against Package.resolved and the generated SBOM.
+
+GRDB.swift 7.10.0
+Copyright (c) 2015-2025 Gwendal Roué
+https://github.com/groue/GRDB.swift
+License: MIT
+
+FeedKit 10.4.0
+Copyright (c) 2016-2025 Nuno Dias
+https://github.com/nmdias/FeedKit
+License: MIT
+
+SwiftSoup 2.13.7
+Copyright (c) 2009-2025 Jonathan Hedley; 2016-2025 Nabil Chatbi
+https://github.com/scinfu/SwiftSoup
+License: MIT
+
+USearch 2.26.0
+Copyright Unum Cloud and contributors
+https://github.com/unum-cloud/USearch
+License: Apache License 2.0
+
+NumKong 7.8.0 (transitive through USearch)
+Copyright Ash Vardanian and contributors
+https://github.com/ashvardanian/NumKong
+License: Apache License 2.0
+
+swift-readability 0.3.0
+Copyright (c) 2025 Ryu
+https://github.com/Ryu0118/swift-readability
+License: MIT
+
+Mozilla Readability 0.5.0 (bundled by swift-readability)
+Copyright Mozilla and contributors
+https://github.com/mozilla/readability
+License: Apache License 2.0
+
+DOMPurify 3.2.3 (bundled by swift-readability; Apache-2.0 path selected)
+Copyright Cure53 and contributors
+https://github.com/cure53/DOMPurify
+License: Apache License 2.0 OR Mozilla Public License 2.0
+
+Sparkle 2.9.4
+Copyright Sparkle Project contributors
+https://github.com/sparkle-project/Sparkle
+License: MIT
+
+The complete license text shipped by each package remains in its source
+artifact and is copied into the release notices bundle by the SBOM/notices
+build step. No GPL- or AGPL-licensed implementation code is included.
+
+Model weights are not bundled until a model/runtime passes the local embedding
+feasibility gate. Any selected model revision and license must be added here and
+to the SBOM before distribution.

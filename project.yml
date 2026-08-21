@@ -1,0 +1,242 @@
+name: FeedFlow
+options:
+  bundleIdPrefix: com.chonghanqin
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  groupSortPosition: top
+configs:
+  Debug: debug
+  Sandbox: debug
+  Release: release
+settings:
+  base:
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: true
+    SWIFT_VERSION: 6.0
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: 15.0
+    ENABLE_HARDENED_RUNTIME: true
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+    GENERATE_INFOPLIST_FILE: false
+  configs:
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+      VALIDATE_PRODUCT: true
+packages:
+  FeedFlowKit:
+    path: Packages/FeedFlowKit
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.4
+targets:
+  FeedFlow:
+    type: application
+    platform: macOS
+    sources: Apps/FeedFlow
+    info:
+      path: Config/Info/FeedFlow-Info.plist
+      properties:
+        CFBundleDisplayName: FeedFlow
+        LSApplicationCategoryType: public.app-category.news
+        NSHumanReadableCopyright: Copyright © 2026 Chonghan Qin
+        FeedFlowTeamIdentifier: $(DEVELOPMENT_TEAM)
+        SUFeedURL: $(FEEDFLOW_APPCAST_URL)
+        SUPublicEDKey: $(FEEDFLOW_SPARKLE_PUBLIC_KEY)
+        CFBundleURLTypes:
+          - CFBundleURLName: FeedFlow Deep Links
+            CFBundleURLSchemes: [feedflow]
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlow.developerid.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.feedflow
+        PRODUCT_NAME: FeedFlow
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news
+        FEEDFLOW_APPCAST_URL: ""
+        FEEDFLOW_SPARKLE_PUBLIC_KEY: ""
+      configs:
+        Sandbox:
+          CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlow.sandbox.entitlements
+    postBuildScripts:
+      - name: Embed SMAppService LaunchAgents
+        basedOnDependencyAnalysis: true
+        inputFiles:
+          - $(SRCROOT)/Config/LaunchAgents/com.chonghanqin.feedflow.agent.plist
+          - $(SRCROOT)/Config/LaunchAgents/com.chonghanqin.feedflow.browser.plist
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LaunchAgents/com.chonghanqin.feedflow.agent.plist
+          - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LaunchAgents/com.chonghanqin.feedflow.browser.plist
+        script: |
+          destination="$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Library/LaunchAgents"
+          mkdir -p "$destination"
+          cp "$SRCROOT/Config/LaunchAgents/com.chonghanqin.feedflow.agent.plist" "$destination/com.chonghanqin.feedflow.agent.plist"
+          cp "$SRCROOT/Config/LaunchAgents/com.chonghanqin.feedflow.browser.plist" "$destination/com.chonghanqin.feedflow.browser.plist"
+    dependencies:
+      - package: FeedFlowKit
+        product: FeedFlowDomain
+      - package: FeedFlowKit
+        product: FeedFlowStorage
+      - package: FeedFlowKit
+        product: FeedFlowModels
+      - package: FeedFlowKit
+        product: FeedFlowDesignSystem
+      - package: FeedFlowKit
+        product: FeedFlowReader
+      - package: FeedFlowKit
+        product: FeedFlowRanking
+      - package: FeedFlowKit
+        product: FeedFlowConnectors
+      - package: FeedFlowKit
+        product: FeedFlowBrowser
+      - package: FeedFlowKit
+        product: FeedFlowIngestion
+      - package: FeedFlowKit
+        product: FeedFlowIntelligence
+      - package: FeedFlowKit
+        product: FeedFlowSearch
+      - package: FeedFlowKit
+        product: FeedFlowIPC
+      - package: Sparkle
+        product: Sparkle
+      - target: FeedFlowShare
+        embed: true
+      - target: FeedFlowAgent
+        embed: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/LoginItems
+      - target: FeedFlowBrowserWorker
+        embed: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/LoginItems
+  FeedFlowAgent:
+    type: application
+    platform: macOS
+    sources: Apps/FeedFlowAgent
+    info:
+      path: Config/Info/FeedFlowAgent-Info.plist
+      properties:
+        CFBundleDisplayName: FeedFlow Agent
+        LSUIElement: true
+        FeedFlowTeamIdentifier: $(DEVELOPMENT_TEAM)
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlowAgent.developerid.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.feedflow.agent
+        PRODUCT_NAME: FeedFlowAgent
+      configs:
+        Sandbox:
+          CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlowAgent.sandbox.entitlements
+    preBuildScripts:
+      - name: Xcode Header-Only NumKong Shim
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/CNumKong.o
+        script: |
+          mkdir -p "$BUILT_PRODUCTS_DIR"
+          if [[ ! -f "$BUILT_PRODUCTS_DIR/CNumKong.o" ]]; then
+            xcrun clang -c "$SRCROOT/BuildSupport/CNumKongShim.c" -o "$BUILT_PRODUCTS_DIR/CNumKong.o"
+          fi
+    dependencies:
+      - package: FeedFlowKit
+        product: FeedFlowStorage
+      - package: FeedFlowKit
+        product: FeedFlowIngestion
+      - package: FeedFlowKit
+        product: FeedFlowIntelligence
+      - package: FeedFlowKit
+        product: FeedFlowSearch
+      - package: FeedFlowKit
+        product: FeedFlowRanking
+      - package: FeedFlowKit
+        product: FeedFlowIPC
+      - package: FeedFlowKit
+        product: FeedFlowBrowser
+      - package: FeedFlowKit
+        product: FeedFlowConnectors
+  FeedFlowBrowserWorker:
+    type: application
+    platform: macOS
+    sources: Apps/FeedFlowBrowserWorker
+    info:
+      path: Config/Info/FeedFlowBrowserWorker-Info.plist
+      properties:
+        CFBundleDisplayName: FeedFlow Browser
+        LSUIElement: true
+        FeedFlowTeamIdentifier: $(DEVELOPMENT_TEAM)
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlowBrowserWorker.developerid.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.feedflow.browser
+        PRODUCT_NAME: FeedFlowBrowserWorker
+      configs:
+        Sandbox:
+          CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlowBrowserWorker.sandbox.entitlements
+    dependencies:
+      - package: FeedFlowKit
+        product: FeedFlowBrowser
+      - package: FeedFlowKit
+        product: FeedFlowIPC
+      - package: FeedFlowKit
+        product: FeedFlowConnectors
+  FeedFlowShare:
+    type: app-extension
+    platform: macOS
+    sources: Apps/FeedFlowShare
+    info:
+      path: Config/Info/FeedFlowShare-Info.plist
+      properties:
+        CFBundleDisplayName: Add to FeedFlow
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareExtensionHandler
+          NSExtensionAttributes:
+            NSExtensionActivationRule: 'SUBQUERY(extensionItems, $item, SUBQUERY($item.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.plain-text").@count > 0).@count > 0'
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlowShare.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.feedflow.share
+        PRODUCT_NAME: FeedFlowShare
+    dependencies:
+      - package: FeedFlowKit
+        product: FeedFlowDomain
+  FeedFlowUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: Tests/FeedFlowUITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+    dependencies:
+      - target: FeedFlow
+schemes:
+  FeedFlow:
+    build:
+      targets:
+        FeedFlow: all
+        FeedFlowAgent: all
+        FeedFlowBrowserWorker: all
+        FeedFlowShare: all
+        FeedFlowUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - FeedFlowUITests
+    archive:
+      config: Release
+  FeedFlow-Sandbox:
+    build:
+      targets:
+        FeedFlow: all
+        FeedFlowAgent: all
+        FeedFlowBrowserWorker: all
+        FeedFlowShare: all
+    run:
+      config: Sandbox
