@@ -26,6 +26,7 @@ public struct SearchDocument: Codable, Hashable, Sendable {
 }
 
 public struct SearchResult: Identifiable, Codable, Hashable, Sendable {
+    public enum MatchReason: String, Codable, Hashable, Sendable { case lexical, semantic }
     public var id: String { "\(kind.rawValue):\(stableID):\(revisionID ?? "current")" }
     public var stableID: String
     public var kind: SearchDocumentKind
@@ -34,8 +35,9 @@ public struct SearchResult: Identifiable, Codable, Hashable, Sendable {
     public var snippet: String
     public var score: Double
     public var isHistorical: Bool
+    public var matchReasons: Set<MatchReason>
 
-    public init(stableID: String, kind: SearchDocumentKind, revisionID: String?, title: String, snippet: String, score: Double, isHistorical: Bool) {
+    public init(stableID: String, kind: SearchDocumentKind, revisionID: String?, title: String, snippet: String, score: Double, isHistorical: Bool, matchReasons: Set<MatchReason> = [.lexical]) {
         self.stableID = stableID
         self.kind = kind
         self.revisionID = revisionID
@@ -43,6 +45,7 @@ public struct SearchResult: Identifiable, Codable, Hashable, Sendable {
         self.snippet = snippet
         self.score = score
         self.isHistorical = isHistorical
+        self.matchReasons = matchReasons
     }
 }
 

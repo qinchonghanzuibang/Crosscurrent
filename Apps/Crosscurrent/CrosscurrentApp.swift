@@ -2,6 +2,7 @@ import CrosscurrentBrowser
 import CrosscurrentConnectors
 import CrosscurrentDesignSystem
 import CrosscurrentDomain
+import CrosscurrentEmbeddingORT
 import CrosscurrentIngestion
 import CrosscurrentIntelligence
 import CrosscurrentIPC
@@ -113,6 +114,7 @@ final class AppModel: ObservableObject {
     @Published var endpointHealth: [SourceEndpointID: StoredEndpointHealth] = [:]
     @Published var platformDiagnosticStatus: [SourceEndpointID: String] = [:]
     @Published var pendingPlatformCapture: BrowserPlatformCaptureRequest?
+    @Published var embeddingStatus = String(localized: "Lexical search active · local embedding asset not installed")
     @Published var people: [StoredEntitySnapshot] = []
     @Published var topics: [StoredTopicSnapshot] = []
     @Published var savedEventIDs: Set<EventID> = []
@@ -126,6 +128,8 @@ final class AppModel: ObservableObject {
     private var todayCoordinator: TodayCoordinator?
     private var indexCoordinator: DerivedIndexCoordinator?
     private var searchStore: DerivedSearchStore?
+    private var semanticIndexCoordinator: SemanticIndexCoordinator?
+    private var semanticStartupTask: Task<Void, Never>?
     private var discoveryService: SourceDiscoveryService?
     private var browserClient: BrowserCreatorSessionXPCClient?
     private var diagnosticCaptureDirectory: URL?
@@ -222,6 +226,7 @@ final class AppModel: ObservableObject {
             _ = try await index.synchronize()
             try await reloadCanonicalEvents()
             try await reloadCanonicalLibrary()
+            startSemanticIndex(repository: repository, locations: locations)
             backgroundState = CrosscurrentServices.agent.status.displayName
             browserWorkerState = CrosscurrentServices.browser.status.displayName
             _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
@@ -340,7 +345,22 @@ final class AppModel: ObservableObject {
             if current[.sources] != previous[.sources] || current[.endpoints] != previous[.endpoints] || current[.entities] != previous[.entities] || current[.topics] != previous[.topics] || current[.library] != previous[.library] {
                 try await reloadCanonicalLibrary()
             }
-            if current[.searchInputs] != previous[.searchInputs] { _ = try await indexCoordinator?.synchronize() }
+            if current[.searchInputs] != previous[.searchInputs] {
+                _ = try await indexCoordinator?.synchronize()
+                if let semanticIndexCoordinator {
+                    semanticStartupTask?.cancel()
+                    semanticStartupTask = Task(priority: .utility) { [weak self] in
+                        do {
+                            try await Task.sleep(for: .milliseconds(750))
+                            try Task.checkCancellation()
+                            let update = try await semanticIndexCoordinator.rebuild()
+                            self?.semanticIndexDidUpdate(update)
+                        } catch is CancellationError {
+                            return
+                        } catch { self?.semanticIndexDidFail(error) }
+                    }
+                }
+            }
             if current[.digests] != previous[.digests], let state = try await repository.digestState(briefingDay: Calendar.autoupdatingCurrent.startOfDay(for: .now)) {
                 digestRevisionReason = state.latestRevision.reason
                 digestUpdatedAt = state.latestRevision.createdAt
@@ -702,7 +722,7 @@ final class AppModel: ObservableObject {
               let accountID = endpoint.accountID,
               let url = endpoint.canonicalURL,
               let browserClient,
-              let diagnosticCaptureDirectory
+              diagnosticCaptureDirectory != nil
         else {
             platformDiagnosticStatus[endpoint.id] = String(localized: "An authenticated account and canonical profile URL are required.")
             return
@@ -761,11 +781,76 @@ final class AppModel: ObservableObject {
         guard let searchStore else { return [] }
         do {
             _ = try await indexCoordinator?.synchronize()
-            return try await searchStore.search(SearchQuery(text: text, kinds: kinds, includeHistory: includeHistory))
+            let lexical = try await searchStore.search(SearchQuery(text: text, kinds: kinds, includeHistory: includeHistory))
+            guard !includeHistory, let semanticIndexCoordinator, let repository else { return lexical }
+            do {
+                let semantic = try await semanticIndexCoordinator.search(text, limit: 50)
+                let documents = try await repository.searchDocuments(includeHistory: false)
+                let byKey = Dictionary(uniqueKeysWithValues: documents.map { ("\($0.kind):\($0.stableID)", $0) })
+                var merged = Dictionary(uniqueKeysWithValues: lexical.map { ($0.id, $0) })
+                for candidate in semantic {
+                    guard candidate.score > 0,
+                          let document = byKey[candidate.id],
+                          let kind = SearchDocumentKind(rawValue: document.kind),
+                          kinds.contains(kind)
+                    else { continue }
+                    let id = "\(kind.rawValue):\(document.stableID):\(document.revisionID ?? "current")"
+                    if var existing = merged[id] {
+                        existing.matchReasons.insert(.semantic)
+                        existing.score = min(1, existing.score * 0.7 + candidate.score * 0.3)
+                        merged[id] = existing
+                    } else {
+                        merged[id] = SearchResult(
+                            stableID: document.stableID,
+                            kind: kind,
+                            revisionID: document.revisionID,
+                            title: document.title,
+                            snippet: String(document.body.prefix(240)),
+                            score: candidate.score * 0.75,
+                            isHistorical: false,
+                            matchReasons: [.semantic]
+                        )
+                    }
+                }
+                return merged.values.sorted { lhs, rhs in lhs.score == rhs.score ? lhs.title < rhs.title : lhs.score > rhs.score }.prefix(50).map { $0 }
+            } catch {
+                semanticIndexDidFail(error)
+                return lexical
+            }
         } catch {
             startupError = error.localizedDescription
             return []
         }
+    }
+
+    private func startSemanticIndex(repository: CrosscurrentRepository, locations: DatabaseLocations) {
+        let assetDirectory = Self.embeddingAssetDirectory ?? locations.container.appending(path: "Models/multilingual-e5-small-ort-cpu/current", directoryHint: .isDirectory)
+        guard FileManager.default.fileExists(atPath: assetDirectory.appending(path: "artifact-manifest.json").path) else { return }
+        embeddingStatus = String(localized: "Validating local embedding asset…")
+        let semanticRoot = locations.derivedSearch.appending(path: "Semantic", directoryHint: .isDirectory)
+        semanticStartupTask = Task { [weak self] in
+            let work = Task.detached(priority: .utility) {
+                let runtime = try SelectedORTEmbeddingRuntime(verifiedAssetDirectory: assetDirectory)
+                let coordinator = SemanticIndexCoordinator(repository: repository, runtime: runtime, rootDirectory: semanticRoot)
+                return (coordinator, try await coordinator.activateOrRebuild())
+            }
+            do {
+                let (coordinator, update) = try await work.value
+                self?.semanticIndexCoordinator = coordinator
+                self?.semanticIndexDidUpdate(update)
+            } catch { self?.semanticIndexDidFail(error) }
+        }
+    }
+
+    private func semanticIndexDidUpdate(_ update: SemanticIndexUpdate) {
+        embeddingStatus = String.localizedStringWithFormat(String(localized: "Semantic search active · %lld current documents"), update.documentCount)
+    }
+
+    private func semanticIndexDidFail(_ error: Error) {
+        embeddingStatus = String.localizedStringWithFormat(
+            String(localized: "Lexical search active · embedding unavailable: %@"),
+            error.localizedDescription
+        )
     }
 
     func addSource(_ input: String) async -> String {
@@ -1044,6 +1129,16 @@ final class AppModel: ObservableObject {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "--fixture-container"), arguments.indices.contains(index + 1) else { return nil }
         return URL(filePath: arguments[index + 1], directoryHint: .isDirectory)
+    }
+
+    private static var embeddingAssetDirectory: URL? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--embedding-asset-directory"), arguments.indices.contains(index + 1) else { return nil }
+        return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
+        #else
+        return nil
+        #endif
     }
 
     private func seedDevelopmentLibrary(_ repository: CrosscurrentRepository) async throws {

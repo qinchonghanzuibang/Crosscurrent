@@ -34,6 +34,8 @@ struct SearchScreen: View {
                             Text(result.snippet).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                             Text("\(result.isHistorical ? String(localized: "Historical revision") : String(localized: "Current revision")) · \(result.kind.displayName)")
                                 .font(.caption).foregroundStyle(result.isHistorical ? .secondary : CrosscurrentColor.accent)
+                            Text(result.matchReasons.map(\.displayName).sorted().joined(separator: " + "))
+                                .font(.caption2).foregroundStyle(.secondary)
                         }
                     }.buttonStyle(.plain)
                 }
@@ -59,6 +61,15 @@ struct SearchScreen: View {
         }
     }
 
+}
+
+private extension SearchResult.MatchReason {
+    var displayName: String {
+        switch self {
+        case .lexical: String(localized: "Lexical")
+        case .semantic: String(localized: "Semantic")
+        }
+    }
 }
 
 private struct SearchTaskKey: Hashable {

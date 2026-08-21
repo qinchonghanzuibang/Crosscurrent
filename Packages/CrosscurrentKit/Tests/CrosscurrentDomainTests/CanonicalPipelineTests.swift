@@ -213,6 +213,10 @@ func providerFreeEnrichmentAndDeduplicationFeedCanonicalClusteringSignals() asyn
     let result = try await EvidenceDeduplicationService(repository: repository).run()
     #expect(result.pairsClassified == 1)
     #expect(result.duplicateFamiliesUpdated == 1)
+    let generationAfterFirstRun = try await repository.generations()[.events]?.generation
+    let repeated = try await EvidenceDeduplicationService(repository: repository).run()
+    #expect(repeated.pairsClassified == 0)
+    #expect(try await repository.generations()[.events]?.generation == generationAfterFirstRun)
     let afterDeduplication = try await repository.pendingEvidenceSegments()
     #expect(Set(afterDeduplication.map(\.independenceGroup)).count == 1)
 }

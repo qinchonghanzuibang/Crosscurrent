@@ -32,18 +32,48 @@ public actor SemanticIndexCoordinator {
         activeManifestURL = rootDirectory.appending(path: "active-vector-namespace.json")
     }
 
-    public func rebuild() async throws -> SemanticIndexUpdate {
+    public func activateOrRebuild(batchSize: Int = 16) async throws -> SemanticIndexUpdate {
+        let descriptor = await runtime.descriptor
+        let generation = try await repository.generations()[.searchInputs]?.generation ?? 0
+        if let data = try? Data(contentsOf: activeManifestURL),
+           let active = try? JSONDecoder().decode(ActiveNamespace.self, from: data),
+           active.descriptor == descriptor,
+           active.generation == generation {
+            try await loadActiveIndex()
+            if index != nil {
+                let documents = try await repository.searchDocuments(includeHistory: false)
+                return SemanticIndexUpdate(
+                    descriptor: descriptor,
+                    documentCount: documents.lazy.filter { !$0.isHistorical }.count,
+                    canonicalGeneration: generation
+                )
+            }
+        }
+        return try await rebuild(batchSize: batchSize)
+    }
+
+    public func rebuild(batchSize: Int = 16) async throws -> SemanticIndexUpdate {
         let descriptor = await runtime.descriptor
         let documents = try await repository.searchDocuments(includeHistory: false)
         let current = documents.filter { !$0.isHistorical }
         let keys = current.map { "\($0.kind):\($0.stableID)" }
         let texts = current.map { $0.title + "\n" + String($0.body.prefix(4_000)) }
-        let vectors = try await runtime.embed(texts, kind: .document)
         let buildID = UUID().uuidString.lowercased()
         let buildRoot = rootDirectory.appending(path: "namespaces/\(buildID)", directoryHint: .isDirectory)
         let next = try USearchVectorIndex(rootDirectory: buildRoot, descriptor: descriptor)
-        try await next.upsert(ids: keys, vectors: vectors)
-        try await next.persist()
+        let boundedBatchSize = max(1, min(batchSize, 64))
+        do {
+            for start in stride(from: 0, to: texts.count, by: boundedBatchSize) {
+                try Task.checkCancellation()
+                let end = min(start + boundedBatchSize, texts.count)
+                let vectors = try await runtime.embed(Array(texts[start..<end]), kind: .document)
+                try await next.upsert(ids: Array(keys[start..<end]), vectors: vectors)
+            }
+            try await next.persist()
+        } catch {
+            try? FileManager.default.removeItem(at: buildRoot)
+            throw error
+        }
         let generation = try await repository.generations()[.searchInputs]?.generation ?? 0
         let manifest = ActiveNamespace(descriptor: descriptor, buildID: buildID, generation: generation, switchedAt: .now)
         let encoder = JSONEncoder()

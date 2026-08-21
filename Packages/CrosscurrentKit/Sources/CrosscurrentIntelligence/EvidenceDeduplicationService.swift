@@ -17,6 +17,22 @@ public struct DeduplicationMaintenanceResult: Codable, Hashable, Sendable {
 /// Persists bounded, provider-free duplicate/coverage decisions before Event candidate
 /// generation. Items remain immutable evidence; relations only affect independence and scoring.
 public actor EvidenceDeduplicationService {
+    private struct Features {
+        var titleTokens: Set<String>
+        var shingles: Set<String>
+        var normalizedAuthor: String?
+        var languageFamily: String
+    }
+
+    private struct CandidatePair: Hashable, Comparable {
+        var left: Int
+        var right: Int
+
+        static func < (lhs: Self, rhs: Self) -> Bool {
+            lhs.left == rhs.left ? lhs.right < rhs.right : lhs.left < rhs.left
+        }
+    }
+
     private let repository: CrosscurrentRepository
 
     public init(repository: CrosscurrentRepository) {
@@ -27,65 +43,123 @@ public actor EvidenceDeduplicationService {
         let evidence = try await repository.currentItemDeduplicationEvidence(limit: limit)
         var result = DeduplicationMaintenanceResult(itemsExamined: evidence.count)
         guard evidence.count > 1 else { return result }
+        let features = evidence.map(makeFeatures)
 
-        for leftIndex in evidence.indices {
+        for pair in candidatePairs(evidence: evidence, features: features).sorted() {
+            let leftIndex = pair.left
+            let rightIndex = pair.right
             let left = evidence[leftIndex]
-            for rightIndex in evidence.index(after: leftIndex)..<evidence.endIndex {
-                let right = evidence[rightIndex]
-                guard isPlausiblePair(left, right) else { continue }
-                let signals = signals(left, right)
-                let classification = DeterministicDeduplicator.classify(signals)
-                guard classification != .unrelated else { continue }
-                let groupsAsDuplicate = Self.groupsAsDuplicate(classification)
-                let saved = try await repository.saveItemRelation(
-                    from: left.itemID,
-                    to: right.itemID,
-                    relationship: classification.rawValue,
-                    confidence: confidence(for: classification, signals: signals),
-                    groupsAsDuplicate: groupsAsDuplicate
-                )
-                if saved {
-                    result.pairsClassified += 1
-                    if groupsAsDuplicate { result.duplicateFamiliesUpdated += 1 }
-                }
+            let right = evidence[rightIndex]
+            guard isPlausiblePair(left, right, features[leftIndex], features[rightIndex]) else { continue }
+            let signals = signals(left, right, features[leftIndex], features[rightIndex])
+            let classification = DeterministicDeduplicator.classify(signals)
+            guard classification != .unrelated else { continue }
+            let groupsAsDuplicate = Self.groupsAsDuplicate(classification)
+            let saved = try await repository.saveItemRelation(
+                from: left.itemID,
+                to: right.itemID,
+                relationship: classification.rawValue,
+                confidence: confidence(for: classification, signals: signals),
+                groupsAsDuplicate: groupsAsDuplicate
+            )
+            if saved {
+                result.pairsClassified += 1
+                if groupsAsDuplicate { result.duplicateFamiliesUpdated += 1 }
             }
         }
         return result
     }
 
-    private func isPlausiblePair(_ lhs: CurrentItemDeduplicationEvidence, _ rhs: CurrentItemDeduplicationEvidence) -> Bool {
-        if lhs.contentHash == rhs.contentHash || lhs.canonicalURL == rhs.canonicalURL || lhs.externalID == rhs.externalID { return true }
-        if let leftDate = lhs.publishedAt, let rightDate = rhs.publishedAt,
-           abs(leftDate.timeIntervalSince(rightDate)) > 45 * 86_400 { return false }
-        let title = tokenSimilarity(lhs.title, rhs.title)
-        if title >= 0.32 { return true }
-        return shingleSimilarity(lhs.text, rhs.text) >= 0.35
+    private func candidatePairs(evidence: [CurrentItemDeduplicationEvidence], features: [Features]) -> Set<CandidatePair> {
+        let maximumSignalCandidatesPerItem = 48
+        let maximumPostingsPerSignal = 64
+        var externalIDs: [String: [Int]] = [:]
+        var canonicalURLs: [String: [Int]] = [:]
+        var contentHashes: [String: [Int]] = [:]
+        var titleTokens: [String: [Int]] = [:]
+        var shinglePostings: [String: [Int]] = [:]
+        var pairs: Set<CandidatePair> = []
+
+        for index in evidence.indices {
+            let item = evidence[index]
+            var stableCandidates: Set<Int> = []
+            var signalCandidates: Set<Int> = []
+            if !item.externalID.isEmpty {
+                stableCandidates.formUnion(externalIDs["\(item.sourceID.description):\(item.externalID)"] ?? [])
+            }
+            if let url = item.canonicalURL?.absoluteString { stableCandidates.formUnion(canonicalURLs[url] ?? []) }
+            if !item.contentHash.isEmpty { stableCandidates.formUnion(contentHashes[item.contentHash] ?? []) }
+            for token in features[index].titleTokens { signalCandidates.formUnion(titleTokens[token] ?? []) }
+            for shingle in features[index].shingles { signalCandidates.formUnion(shinglePostings[shingle] ?? []) }
+
+            for previous in stableCandidates { pairs.insert(CandidatePair(left: previous, right: index)) }
+            for previous in signalCandidates.sorted(by: >).prefix(maximumSignalCandidatesPerItem) {
+                pairs.insert(CandidatePair(left: previous, right: index))
+            }
+
+            if !item.externalID.isEmpty {
+                append(index, to: "\(item.sourceID.description):\(item.externalID)", in: &externalIDs, limit: maximumPostingsPerSignal)
+            }
+            if let url = item.canonicalURL?.absoluteString { append(index, to: url, in: &canonicalURLs, limit: maximumPostingsPerSignal) }
+            if !item.contentHash.isEmpty { append(index, to: item.contentHash, in: &contentHashes, limit: maximumPostingsPerSignal) }
+            for token in features[index].titleTokens { append(index, to: token, in: &titleTokens, limit: maximumPostingsPerSignal) }
+            for shingle in features[index].shingles { append(index, to: shingle, in: &shinglePostings, limit: maximumPostingsPerSignal) }
+        }
+        return pairs
     }
 
-    private func signals(_ lhs: CurrentItemDeduplicationEvidence, _ rhs: CurrentItemDeduplicationEvidence) -> DuplicateSignals {
+    private func append(_ index: Int, to key: String, in postings: inout [String: [Int]], limit: Int) {
+        var values = postings[key] ?? []
+        values.append(index)
+        if values.count > limit { values.removeFirst(values.count - limit) }
+        postings[key] = values
+    }
+
+    private func makeFeatures(_ item: CurrentItemDeduplicationEvidence) -> Features {
+        Features(
+            titleTokens: tokens(item.title),
+            shingles: shingles(item.text),
+            normalizedAuthor: normalized(item.author),
+            languageFamily: languageFamily(item.languageCode)
+        )
+    }
+
+    private func isPlausiblePair(
+        _ lhs: CurrentItemDeduplicationEvidence,
+        _ rhs: CurrentItemDeduplicationEvidence,
+        _ left: Features,
+        _ right: Features
+    ) -> Bool {
+        if !lhs.contentHash.isEmpty, lhs.contentHash == rhs.contentHash { return true }
+        if let canonicalURL = lhs.canonicalURL, canonicalURL == rhs.canonicalURL { return true }
+        if !lhs.externalID.isEmpty, lhs.sourceID == rhs.sourceID, lhs.externalID == rhs.externalID { return true }
+        if let leftDate = lhs.publishedAt, let rightDate = rhs.publishedAt,
+           abs(leftDate.timeIntervalSince(rightDate)) > 45 * 86_400 { return false }
+        let title = similarity(left.titleTokens, right.titleTokens)
+        if title >= 0.32 { return true }
+        return similarity(left.shingles, right.shingles) >= 0.35
+    }
+
+    private func signals(
+        _ lhs: CurrentItemDeduplicationEvidence,
+        _ rhs: CurrentItemDeduplicationEvidence,
+        _ left: Features,
+        _ right: Features
+    ) -> DuplicateSignals {
         DuplicateSignals(
             sameExternalID: lhs.sourceID == rhs.sourceID && lhs.externalID == rhs.externalID,
             sameCanonicalURL: lhs.canonicalURL != nil && lhs.canonicalURL == rhs.canonicalURL,
             sameContentHash: lhs.contentHash == rhs.contentHash,
-            titleSimilarity: tokenSimilarity(lhs.title, rhs.title),
-            shingleSimilarity: shingleSimilarity(lhs.text, rhs.text),
-            sameAuthor: normalized(lhs.author) != nil && normalized(lhs.author) == normalized(rhs.author),
+            titleSimilarity: similarity(left.titleTokens, right.titleTokens),
+            shingleSimilarity: similarity(left.shingles, right.shingles),
+            sameAuthor: left.normalizedAuthor != nil && left.normalizedAuthor == right.normalizedAuthor,
             timeDistance: timeDistance(lhs.publishedAt, rhs.publishedAt),
             declaresCitation: declaresCitation(lhs, target: rhs) || declaresCitation(rhs, target: lhs),
-            languageMatch: languageFamily(lhs.languageCode) == languageFamily(rhs.languageCode)
+            languageMatch: left.languageFamily == right.languageFamily
         )
     }
 
-    private func tokenSimilarity(_ lhs: String, _ rhs: String) -> Double {
-        let left = tokens(lhs)
-        let right = tokens(rhs)
-        let union = left.union(right)
-        return union.isEmpty ? 0 : Double(left.intersection(right).count) / Double(union.count)
-    }
-
-    private func shingleSimilarity(_ lhs: String, _ rhs: String) -> Double {
-        let left = shingles(lhs)
-        let right = shingles(rhs)
+    private func similarity(_ left: Set<String>, _ right: Set<String>) -> Double {
         let union = left.union(right)
         return union.isEmpty ? 0 : Double(left.intersection(right).count) / Double(union.count)
     }

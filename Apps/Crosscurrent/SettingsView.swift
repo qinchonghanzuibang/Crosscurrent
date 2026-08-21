@@ -53,6 +53,7 @@ struct SettingsView: View {
                 GroupBox("Privacy boundary") { Text("Authenticated and public are independent. Private, restricted, and unknown content stays local unless an explicit compatible policy permits otherwise.").frame(maxWidth: .infinity, alignment: .leading).padding(6) }
                 LabeledContent("Reasoning provider", value: model.providerConfigured ? "Configured" : "Not configured")
                 LabeledContent("Embedding route", value: "Development-selected · multilingual-e5-small / ORT CPU")
+                Text(model.embeddingStatus).font(.caption).foregroundStyle(.secondary)
                 Text("Semantic indexing activates only after the pinned model/runtime artifact manifest, checksums, license, and local runtime layout validate. Lexical search remains available without it.")
                     .font(.caption).foregroundStyle(.secondary)
                 Picker("Fast route", selection: Binding(get: { model.fastProviderID }, set: { value in Task { await model.setProviderRoute(.fast, providerID: value) } })) {

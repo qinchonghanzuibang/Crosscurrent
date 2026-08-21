@@ -160,10 +160,13 @@ import Testing
 private actor FixtureEmbeddingRuntime: EmbeddingRuntime {
     let descriptor = EmbeddingDescriptor(runtimeID: "fixture-runtime", modelID: "fixture-model", modelRevision: "1", dimension: 3, scalarType: .float32, pooling: "fixture", normalization: "l2")
     private var fails = false
+    private var maximumBatchSize = 0
 
     func setFails(_ value: Bool) { fails = value }
+    func observedMaximumBatchSize() -> Int { maximumBatchSize }
     func embed(_ texts: [String], kind _: EmbeddingInputKind) throws -> [[Float]] {
         if fails { throw CocoaError(.fileReadCorruptFile) }
+        maximumBatchSize = max(maximumBatchSize, texts.count)
         return texts.map { text in
             let value = text.lowercased()
             if value.contains("beta") { return [0, 1, 0] }
@@ -194,13 +197,16 @@ private actor FixtureEmbeddingRuntime: EmbeddingRuntime {
 
     let runtime = FixtureEmbeddingRuntime()
     let coordinator = SemanticIndexCoordinator(repository: repository, runtime: runtime, rootDirectory: locations.derivedSearch.appending(path: "Semantic"))
-    let update = try await coordinator.rebuild()
+    let update = try await coordinator.rebuild(batchSize: 1)
     #expect(update.documentCount >= 2)
+    #expect(await runtime.observedMaximumBatchSize() == 1)
     #expect(try await coordinator.search("beta", limit: 1).first?.id == "item:\(item.id.description)")
     let manifestURL = locations.derivedSearch.appending(path: "Semantic/active-vector-namespace.json")
     let activeBeforeFailure = try Data(contentsOf: manifestURL)
 
     await runtime.setFails(true)
+    let reused = try await coordinator.activateOrRebuild(batchSize: 1)
+    #expect(reused.documentCount == update.documentCount)
     await #expect(throws: (any Error).self) { try await coordinator.rebuild() }
     #expect(try Data(contentsOf: manifestURL) == activeBeforeFailure)
 }

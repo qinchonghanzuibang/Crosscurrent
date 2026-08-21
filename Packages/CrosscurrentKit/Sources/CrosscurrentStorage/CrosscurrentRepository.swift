@@ -1074,6 +1074,27 @@ public actor CrosscurrentRepository {
         guard fromItemID != toItemID else { return false }
         let ordered = [fromItemID.description, toItemID.description].sorted()
         let relationID = "relation:\(ordered[0]):\(ordered[1]):\(relationship)"
+        let alreadyPersisted = try database.pool.read { db in
+            let relationExists = try Bool.fetchOne(
+                db,
+                sql: "SELECT EXISTS(SELECT 1 FROM item_relations WHERE id=?)",
+                arguments: [relationID]
+            ) ?? false
+            guard relationExists, groupsAsDuplicate else { return relationExists }
+            return try Bool.fetchOne(
+                db,
+                sql: """
+                SELECT EXISTS(
+                  SELECT 1 FROM duplicate_group_members lhs
+                  JOIN duplicate_group_members rhs ON rhs.group_id=lhs.group_id
+                  WHERE lhs.item_id=? AND rhs.item_id=?
+                    AND lhs.classification=? AND rhs.classification=?
+                )
+                """,
+                arguments: [ordered[0], ordered[1], relationship, relationship]
+            ) ?? false
+        }
+        if alreadyPersisted { return false }
         return try mutate(domains: [.items, .events]) { db in
             try db.execute(
                 sql: "INSERT OR IGNORE INTO item_relations (id, from_item_id, to_item_id, relationship, confidence) VALUES (?, ?, ?, ?, ?)",
