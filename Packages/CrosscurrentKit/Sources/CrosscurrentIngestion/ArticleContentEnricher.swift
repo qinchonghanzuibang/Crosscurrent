@@ -52,7 +52,7 @@ public actor ArticleContentEnricher {
         } catch {
             // A conservative native sanitizer still improves feed-provided HTML
             // when Readability cannot identify a main article.
-            let result = try StaticHTMLPreprocessor.conservativeSanitize(html)
+            let result = try StaticHTMLPreprocessor.conservativeSanitize(html, baseURL: candidate.canonicalURL)
             guard result.plainText.count >= max(200, existingText.count) else { return candidate }
             enriched.contentHTML = result.sanitizedHTML
             enriched.contentText = result.plainText

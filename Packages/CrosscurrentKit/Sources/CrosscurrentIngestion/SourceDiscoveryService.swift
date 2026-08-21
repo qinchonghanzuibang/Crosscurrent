@@ -90,6 +90,21 @@ public actor SourceDiscoveryService {
     }
 
     public func commit(_ result: ConnectorDiscoveryResult, idempotencyPrefix: String) async throws -> SourceDiscoveryCommit {
+        if let existing = try await existingSource(matching: result) {
+            var imported = 0
+            if let endpoint = existing.endpoints.first(where: { Self.endpoint($0, matchesAnyIn: result) }) {
+                for candidate in result.recentCandidates {
+                    let complete = try await articleEnricher.enrich(candidate, connector: endpoint.connector)
+                    let value = try await ingestion.ingest(candidate: complete, sourceID: existing.source.id, endpointID: endpoint.id)
+                    if value.createdRevision { imported += 1 }
+                }
+            }
+            return SourceDiscoveryCommit(
+                sourceID: existing.source.id,
+                endpointIDs: existing.endpoints.map(\.id),
+                importedItems: imported
+            )
+        }
         _ = try await repository.saveSource(
             result.source,
             revision: result.sourceRevision,
@@ -130,6 +145,22 @@ public actor SourceDiscoveryService {
             }
         }
         return SourceDiscoveryCommit(sourceID: result.source.id, endpointIDs: result.endpoints.map(\.id), importedItems: imported)
+    }
+
+    private func existingSource(matching result: ConnectorDiscoveryResult) async throws -> StoredSourceSnapshot? {
+        return try await repository.sourceSnapshots().first { snapshot in
+            snapshot.endpoints.contains { Self.endpoint($0, matchesAnyIn: result) }
+        }
+    }
+
+    private static func endpoint(_ endpoint: SourceEndpoint, matchesAnyIn result: ConnectorDiscoveryResult) -> Bool {
+        let canonical = endpoint.canonicalURL.map(URLNormalizer.canonicalize)?.absoluteString
+        return result.endpoints.contains { discovered in
+            guard discovered.connector == endpoint.connector else { return false }
+            let sameExternalID = !discovered.externalID.isEmpty && discovered.externalID == endpoint.externalID
+            let discoveredCanonical = discovered.canonicalURL.map(URLNormalizer.canonicalize)?.absoluteString
+            return sameExternalID || (discoveredCanonical != nil && discoveredCanonical == canonical)
+        }
     }
 
     private static func connectorOrder(for url: URL) -> [ConnectorKind] {

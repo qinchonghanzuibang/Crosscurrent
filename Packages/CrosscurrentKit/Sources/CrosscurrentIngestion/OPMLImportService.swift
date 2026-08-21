@@ -1,4 +1,5 @@
 import CrosscurrentConnectors
+import CrosscurrentDomain
 import CrosscurrentStorage
 import Foundation
 
@@ -6,12 +7,22 @@ public struct OPMLImportResult: Sendable {
     public var sourceCount: Int
     public var folderCount: Int
     public var failures: [String]
+    public var entries: [OPMLImportEntryResult]
 
-    public init(sourceCount: Int = 0, folderCount: Int = 0, failures: [String] = []) {
+    public init(sourceCount: Int = 0, folderCount: Int = 0, failures: [String] = [], entries: [OPMLImportEntryResult] = []) {
         self.sourceCount = sourceCount
         self.folderCount = folderCount
         self.failures = failures
+        self.entries = entries
     }
+}
+
+public struct OPMLImportEntryResult: Sendable {
+    public var title: String
+    public var feedURL: URL
+    public var message: String
+    public var succeeded: Bool
+    public var endpointIDs: [SourceEndpointID]
 }
 
 /// Imports subscriptions through the same discovery path as individual Sources while retaining
@@ -56,13 +67,26 @@ public actor OPMLImportService {
 
         if let feedURL = outline.feedURL {
             do {
-                let discovered = try await discovery.discover(.init(url: feedURL), context: context)
+                let wasExisting = try await Self.sourceExists(feedURL: feedURL, repository: repository)
+                var preview = try await discovery.preview(.init(url: feedURL), context: context)
+                preview.result.sourceRevision.displayName = outline.title
+                guard preview.availableActions.contains(.subscribe) else { throw ConnectorError.unsupportedInput }
+                let committed = try await discovery.commit(preview, action: .subscribe)
                 if let effectiveParent {
-                    _ = try await repository.assignSource(discovered.source.id, toFolder: effectiveParent, sortOrder: sortOrder)
+                    _ = try await repository.assignSource(committed.sourceID, toFolder: effectiveParent, sortOrder: sortOrder)
                 }
                 result.sourceCount += 1
+                result.entries.append(OPMLImportEntryResult(
+                    title: outline.title,
+                    feedURL: feedURL,
+                    message: wasExisting ? "Already subscribed" : "Imported",
+                    succeeded: true,
+                    endpointIDs: committed.endpointIDs
+                ))
             } catch {
-                result.failures.append("\(outline.title): \(error.localizedDescription)")
+                let message = "\(outline.title): \(error.localizedDescription)"
+                result.failures.append(message)
+                result.entries.append(OPMLImportEntryResult(title: outline.title, feedURL: feedURL, message: error.localizedDescription, succeeded: false, endpointIDs: []))
             }
         }
 
@@ -79,8 +103,19 @@ public actor OPMLImportService {
 
     private static func safeAttributes(_ attributes: [String: String]) -> [String: String] {
         let secretFragments = ["token", "secret", "password", "credential", "cookie", "authorization"]
+        let structural = Set(["text", "title", "type", "xmlurl", "htmlurl"])
         return attributes.filter { key, _ in
-            !secretFragments.contains { key.lowercased().contains($0) }
+            let normalized = key.lowercased()
+            return !structural.contains(normalized) && !secretFragments.contains { normalized.contains($0) }
+        }
+    }
+
+    private static func sourceExists(feedURL: URL, repository: CrosscurrentRepository) async throws -> Bool {
+        let canonical = URLNormalizer.canonicalize(feedURL).absoluteString
+        return try await repository.sourceSnapshots().contains { snapshot in
+            snapshot.endpoints.contains { endpoint in
+                endpoint.canonicalURL.map(URLNormalizer.canonicalize)?.absoluteString == canonical
+            }
         }
     }
 }

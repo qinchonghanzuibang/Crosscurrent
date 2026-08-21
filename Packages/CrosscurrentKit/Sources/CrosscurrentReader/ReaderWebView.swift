@@ -66,14 +66,30 @@ public struct ReaderWebView: NSViewRepresentable {
         let loadIdentity = document.id + ":" + String(document.sanitizedHTML.hashValue)
         guard context.coordinator.loadedIdentity != loadIdentity else { return }
         context.coordinator.loadedIdentity = loadIdentity
-        let escapedTitle = document.title.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
-        let page = """
+        context.coordinator.renderTask?.cancel()
+        context.coordinator.renderTask = Task {
+            let renderedHTML = await ReaderHTMLPreparer.prepare(document.sanitizedHTML)
+            guard !Task.isCancelled, context.coordinator.loadedIdentity == loadIdentity else { return }
+            webView.loadHTMLString(Self.page(document: document, renderedHTML: renderedHTML), baseURL: document.baseURL)
+        }
+    }
+
+    private static func page(document: ReaderDocument, renderedHTML: String) -> String {
+        let escapedTitle = document.title
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        return """
         <!doctype html><html><head><meta charset="utf-8">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob: app-asset:; style-src 'unsafe-inline'; font-src data: app-asset:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'">
-        <style>:root{color-scheme:light dark}body{font:18px/1.72 -apple-system;padding:36px 8%;max-width:760px;margin:auto;color:CanvasText;background:Canvas}h1{font-size:2.15em;line-height:1.12;letter-spacing:-.025em}img{max-width:100%;height:auto;border-radius:10px}a{color:#d5603f}blockquote{border-left:3px solid #d5603f;margin-left:0;padding-left:1.1em;color:GrayText}pre{overflow:auto;padding:1em;background:color-mix(in srgb,CanvasText 7%,Canvas);border-radius:8px}</style>
-        </head><body><article><h1>\(escapedTitle)</h1>\(document.sanitizedHTML)</article></body></html>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="referrer" content="no-referrer">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data: blob: app-asset:; style-src 'unsafe-inline'; font-src data: app-asset:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'">
+        <style>
+        :root{color-scheme:light dark;--accent:#d5603f;--muted:color-mix(in srgb,CanvasText 62%,Canvas);--rule:color-mix(in srgb,CanvasText 18%,Canvas);--code:color-mix(in srgb,CanvasText 7%,Canvas)}
+        *{box-sizing:border-box}body{font:18px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:36px clamp(24px,8vw,72px) 72px;max-width:900px;margin:auto;color:CanvasText;background:Canvas;overflow-wrap:break-word}article{min-width:0}h1,h2,h3,h4,h5,h6{line-height:1.22;letter-spacing:-.018em;margin:1.8em 0 .65em;text-wrap:balance}h1{font-size:clamp(2rem,5vw,2.65rem);line-height:1.1;margin-top:.2em}h2{font-size:1.55em}h3{font-size:1.25em}p,ul,ol,blockquote,pre,table,figure{margin-top:1.05em;margin-bottom:1.05em}ul,ol{padding-left:1.45em}li>ul,li>ol{margin:.35em 0}a{color:var(--accent);text-decoration-thickness:.08em;text-underline-offset:.15em}hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0}blockquote{border-left:3px solid var(--accent);margin-left:0;padding:.05em 0 .05em 1.1em;color:var(--muted)}code{font:0.88em/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:.12em .32em;border-radius:4px}pre{overflow:auto;white-space:pre;padding:1em 1.1em;background:var(--code);border:1px solid var(--rule);border-radius:9px;tab-size:4;-webkit-overflow-scrolling:touch}pre code{font-size:.86em;background:none;padding:0;border-radius:0}figure{margin-left:0;margin-right:0;text-align:center}img,svg{display:block;max-width:100%;height:auto;margin-left:auto;margin-right:auto}img{border-radius:7px}figcaption{max-width:68ch;margin:.65em auto 0;color:var(--muted);font-size:.88em;line-height:1.45}table{display:block;width:max-content;max-width:100%;overflow-x:auto;border-collapse:collapse;border-spacing:0;-webkit-overflow-scrolling:touch}th,td{min-width:8em;padding:.62em .75em;border:1px solid var(--rule);text-align:left;vertical-align:top}th{font-weight:650;background:var(--code)}math{font-size:1.04em}math[display="block"]{display:block;max-width:100%;overflow-x:auto;overflow-y:hidden;margin:1.25em 0;padding:.2em 0;text-align:center;-webkit-overflow-scrolling:touch}@media(max-width:560px){body{font-size:17px;padding:24px 20px 56px}th,td{min-width:7em}}
+        </style>
+        </head><body><article><h1>\(escapedTitle)</h1>\(renderedHTML)</article></body></html>
         """
-        webView.loadHTMLString(page, baseURL: document.baseURL)
     }
 
     public final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
@@ -81,6 +97,7 @@ public struct ReaderWebView: NSViewRepresentable {
         fileprivate var activatedLink: Binding<URL?>
         fileprivate var itemRevisionID = ItemRevisionID()
         fileprivate var loadedIdentity: String?
+        fileprivate var renderTask: Task<Void, Never>?
 
         fileprivate init(selection: Binding<ReaderSelectionContext?>, activatedLink: Binding<URL?>) {
             self.selection = selection

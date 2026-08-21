@@ -44,6 +44,16 @@ Copyright Cure53 and contributors
 https://github.com/cure53/DOMPurify
 License: Apache License 2.0 OR Mozilla Public License 2.0
 
+MathJaxSwift 3.5.0
+Copyright (c) 2023 Colin Campbell
+https://github.com/colinc86/MathJaxSwift
+License: MIT
+
+MathJax 3.2.2 (bundled by MathJaxSwift)
+Copyright MathJax Consortium and contributors
+https://github.com/mathjax/MathJax
+License: Apache License 2.0
+
 Sparkle 2.9.4
 Copyright Sparkle Project contributors
 https://github.com/sparkle-project/Sparkle

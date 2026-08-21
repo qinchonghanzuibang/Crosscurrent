@@ -54,7 +54,7 @@ public actor IngestionPipeline {
         if existing?.currentContentHash != contentHash {
             let sanitizedHTML: String?
             if let contentHTML = candidate.contentHTML {
-                sanitizedHTML = try StaticHTMLPreprocessor.conservativeSanitize(contentHTML).sanitizedHTML
+                sanitizedHTML = try StaticHTMLPreprocessor.conservativeSanitize(contentHTML, baseURL: candidate.canonicalURL).sanitizedHTML
             } else {
                 sanitizedHTML = nil
             }

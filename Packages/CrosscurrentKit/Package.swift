@@ -41,6 +41,7 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers", exact: "1.3.3"),
         .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.31.6"),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", exact: "3.31.4"),
+        .package(url: "https://github.com/colinc86/MathJaxSwift", exact: "3.5.0"),
     ],
     targets: [
         .target(name: "CrosscurrentDomain"),
@@ -68,7 +69,11 @@ let package = Package(
             .product(name: "USearch", package: "USearch"),
         ]),
         .target(name: "CrosscurrentRanking", dependencies: ["CrosscurrentDomain", "CrosscurrentStorage"]),
-        .target(name: "CrosscurrentReader", dependencies: ["CrosscurrentDomain", "CrosscurrentBrowser"]),
+        .target(name: "CrosscurrentReader", dependencies: [
+            "CrosscurrentDomain", "CrosscurrentBrowser",
+            .product(name: "SwiftSoup", package: "SwiftSoup"),
+            .product(name: "MathJaxSwift", package: "MathJaxSwift"),
+        ]),
         .target(name: "CrosscurrentModels", dependencies: ["CrosscurrentDomain", "CrosscurrentRanking"]),
         .target(name: "CrosscurrentDesignSystem", dependencies: ["CrosscurrentDomain"]),
         .target(name: "CrosscurrentEmbeddingQualification", dependencies: ["CrosscurrentDomain", "CrosscurrentStorage"]),

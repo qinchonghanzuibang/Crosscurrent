@@ -1,5 +1,5 @@
 {
-  "originHash" : "2826404ff4de5a3dfb29038f4afa56a0f4c0374b973c0b7d0914adca611c5d28",
+  "originHash" : "03540b4c9cf879ddc97f7c1e1e425f60019e5567b021fa6c7bd6f5d357b5b326",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -26,6 +26,15 @@
       "state" : {
         "revision" : "36e30a6f1ef10e4194f6af0cff90888526f0c115",
         "version" : "7.10.0"
+      }
+    },
+    {
+      "identity" : "mathjaxswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/colinc86/MathJaxSwift",
+      "state" : {
+        "revision" : "00e9c3df6b1c82031c7fe3785028f3d21c0d73ba",
+        "version" : "3.5.0"
       }
     },
     {
