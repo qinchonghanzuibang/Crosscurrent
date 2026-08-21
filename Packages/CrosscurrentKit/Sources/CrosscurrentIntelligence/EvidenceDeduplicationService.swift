@@ -91,16 +91,20 @@ public actor EvidenceDeduplicationService {
     }
 
     private func shingles(_ value: String) -> Set<String> {
-        let values = Array(tokens(value).sorted())
+        let values = orderedTokens(value)
         guard values.count >= 3 else { return Set(values) }
         return Set((0...(values.count - 3)).map { values[$0...($0 + 2)].joined(separator: " ") })
     }
 
     private func tokens(_ value: String) -> Set<String> {
+        Set(orderedTokens(value))
+    }
+
+    private func orderedTokens(_ value: String) -> [String] {
         let normalized = value.precomposedStringWithCanonicalMapping.lowercased()
         let words = normalized.split { $0.isWhitespace || $0.isPunctuation }.map(String.init).filter { $0.count > 1 }
         let han = normalized.unicodeScalars.filter { (0x3400...0x9FFF).contains(Int($0.value)) }.map(String.init)
-        return Set(words + han)
+        return words + han
     }
 
     private func declaresCitation(_ source: CurrentItemDeduplicationEvidence, target: CurrentItemDeduplicationEvidence) -> Bool {

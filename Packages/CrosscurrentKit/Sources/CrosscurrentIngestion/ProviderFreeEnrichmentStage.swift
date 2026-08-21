@@ -93,44 +93,48 @@ public actor ProviderFreeEnrichmentStage {
         return length >= 2 && length <= 100
     }
 
-    /// Returns UTF-8 offsets while requiring language-aware token boundaries for Latin aliases.
+    /// Returns offsets into the original UTF-8 buffer. Foundation performs the
+    /// case/diacritic comparison but returns ranges in the original string, so a
+    /// folded spelling such as "Cafe" can never shift or truncate the bytes for
+    /// an original spelling such as "CAFÉ".
     private static func exactRanges(of needle: String, in haystack: String) -> [Range<Int>] {
-        let foldedNeedle = fold(needle)
-        let foldedHaystack = fold(haystack)
-        guard !foldedNeedle.isEmpty else { return [] }
-        let needleBytes = Array(foldedNeedle.utf8)
-        let haystackBytes = Array(foldedHaystack.utf8)
-        guard needleBytes.count <= haystackBytes.count else { return [] }
-        let requiresBoundary = foldedNeedle.unicodeScalars.contains { $0.value < 0x2E80 && (CharacterSet.alphanumerics.contains($0)) }
+        guard !needle.isEmpty else { return [] }
+        let requiresBoundary = needle.unicodeScalars.contains {
+            $0.value < 0x2E80 && CharacterSet.alphanumerics.contains($0)
+        }
         var result: [Range<Int>] = []
-        var index = 0
-        while index + needleBytes.count <= haystackBytes.count {
-            let end = index + needleBytes.count
-            if Array(haystackBytes[index..<end]) == needleBytes,
-               (!requiresBoundary || (isBoundary(haystackBytes, at: index) && isBoundary(haystackBytes, at: end))) {
-                result.append(index..<end)
-                index = end
-            } else {
-                index += 1
+        var searchRange = haystack.startIndex..<haystack.endIndex
+        while let match = haystack.range(
+            of: needle,
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            range: searchRange,
+            locale: Locale(identifier: "en_US_POSIX")
+        ) {
+            if !requiresBoundary || (isBoundary(haystack, before: match.lowerBound) && isBoundary(haystack, after: match.upperBound)) {
+                let lower = haystack[..<match.lowerBound].utf8.count
+                let length = haystack[match].utf8.count
+                result.append(lower..<(lower + length))
             }
+            guard match.upperBound < haystack.endIndex else { break }
+            searchRange = match.upperBound..<haystack.endIndex
         }
         return result
     }
 
-    private static func isBoundary(_ bytes: [UInt8], at index: Int) -> Bool {
-        guard index > 0, index < bytes.count else { return true }
-        let byte = bytes[index]
-        let previous = bytes[index - 1]
-        func isASCIIWord(_ value: UInt8) -> Bool {
-            (48...57).contains(value) || (65...90).contains(value) || (97...122).contains(value) || value == 95
-        }
-        return !isASCIIWord(byte) || !isASCIIWord(previous)
+    private static func isBoundary(_ value: String, before index: String.Index) -> Bool {
+        guard index > value.startIndex else { return true }
+        return !isWordCharacter(value[value.index(before: index)])
     }
 
-    private static func fold(_ value: String) -> String {
-        value.precomposedStringWithCanonicalMapping
-            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-            .lowercased()
+    private static func isBoundary(_ value: String, after index: String.Index) -> Bool {
+        guard index < value.endIndex else { return true }
+        return !isWordCharacter(value[index])
+    }
+
+    private static func isWordCharacter(_ character: Character) -> Bool {
+        character == "_" || character.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) || CharacterSet.nonBaseCharacters.contains($0)
+        }
     }
 
     private static func utf8Substring(_ value: String, range: Range<Int>) -> String {

@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "selectionPolicy": "Select a complete model/runtime pair only after hash-bound multilingual quality, tokenizer parity, latency, throughput, RSS, cold start, disk, binary, packaging, signing, licensing, and maintenance evidence. Performance is a Pareto objective; this manifest defines no invented hard limits.",
+  "candidates": [
+    {
+      "id": "minilm-l12-native-coreml-all",
+      "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "modelRevision": "a39062b9112d981477eb4dcdc8b2e9f1a4b5a883",
+      "runtime": "native Core ML (all compute units)",
+      "runtimeRevision": "macOS system framework",
+      "license": "Apache-2.0",
+      "status": "benchmarkable",
+      "artifacts": [
+        {"sourcePath":"coreml/feature-extraction/float16_model.mlpackage/Manifest.json","destination":"model.mlpackage/Manifest.json","bytes":617,"sha256":"e48baf0e5008504316fd59bb30bb229276f34972c726cfbd836a22ee462049b7"},
+        {"sourcePath":"coreml/feature-extraction/float16_model.mlpackage/Data/com.apple.CoreML/model.mlmodel","destination":"model.mlpackage/Data/com.apple.CoreML/model.mlmodel","bytes":170634,"sha256":"eeea99dfac70be10562a8819d2aa2889664f43f3e4cb0d7bdc608c48d68a8ea3"},
+        {"sourcePath":"coreml/feature-extraction/float16_model.mlpackage/Data/com.apple.CoreML/weights/weight.bin","destination":"model.mlpackage/Data/com.apple.CoreML/weights/weight.bin","bytes":235320320,"sha256":"08f6d1d0a172aed2a04b12412a21efa8855e32618342062e2c196711da0c5332"},
+        {"sourcePath":"tokenizer.json","destination":"tokenizer.json","bytes":9081518,"sha256":"2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8"},
+        {"sourcePath":"tokenizer_config.json","destination":"tokenizer_config.json","bytes":480,"sha256":"cac868512d555e9ac37a33c28300d36931ae4b5ddff43f1ca9bdacfe6fcd9dc8"},
+        {"sourcePath":"special_tokens_map.json","destination":"special_tokens_map.json","bytes":239,"sha256":"378eb3bf733eb16e65792d7e3fda5b8a4631387ca04d2015199c4d4f22ae554d"}
+      ]
+    },
+    {
+      "id": "minilm-l12-native-coreml-cpuOnly",
+      "inheritsArtifactsFrom": "minilm-l12-native-coreml-all",
+      "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "modelRevision": "a39062b9112d981477eb4dcdc8b2e9f1a4b5a883",
+      "runtime": "native Core ML (CPU only)",
+      "runtimeRevision": "macOS system framework",
+      "license": "Apache-2.0",
+      "status": "benchmarkable",
+      "artifacts": []
+    },
+    {
+      "id": "multilingual-e5-small-mlx",
+      "model": "intfloat/multilingual-e5-small",
+      "modelRevision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+      "runtime": "MLXEmbedders",
+      "runtimeRevision": "mlx-swift-lm 3.31.4 / mlx-swift 0.31.6",
+      "license": "MIT",
+      "status": "benchmarkable",
+      "artifacts": [
+        {"sourcePath":"config.json","destination":"config.json","bytes":655,"sha256":"69137736cab8b8903a07fe8afaafdda25aac55415a12a55d1bffa9f581abf959"},
+        {"sourcePath":"model.safetensors","destination":"model.safetensors","bytes":470641600,"sha256":"1a55775f53449dac10a2bcbc312469fac40b96d53198c407081a831f81c98477"},
+        {"sourcePath":"tokenizer.json","destination":"tokenizer.json","bytes":17082730,"sha256":"0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"},
+        {"sourcePath":"tokenizer_config.json","destination":"tokenizer_config.json","bytes":443,"sha256":"a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b"},
+        {"sourcePath":"1_Pooling/config.json","destination":"1_Pooling/config.json","bytes":200,"sha256":"987f7a67a38fa564c849bb5d277c52ab9088a84368fc0be31a354125aebb12a0"}
+      ]
+    },
+    {
+      "id": "multilingual-e5-small-ort-cpu",
+      "model": "intfloat/multilingual-e5-small",
+      "modelRevision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+      "runtime": "ONNX Runtime CPU",
+      "runtimeRevision": "1.29.0 official macOS arm64 dylib",
+      "license": "MIT",
+      "status": "benchmarkable",
+      "artifacts": [
+        {"sourcePath":"onnx/model.onnx","destination":"model.onnx","bytes":470268510,"sha256":"ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665"},
+        {"sourcePath":"config.json","destination":"config.json","bytes":655,"sha256":"69137736cab8b8903a07fe8afaafdda25aac55415a12a55d1bffa9f581abf959"},
+        {"sourcePath":"tokenizer.json","destination":"tokenizer.json","bytes":17082730,"sha256":"0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"},
+        {"sourcePath":"tokenizer_config.json","destination":"tokenizer_config.json","bytes":443,"sha256":"a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b"},
+        {"sourcePath":"1_Pooling/config.json","destination":"1_Pooling/config.json","bytes":200,"sha256":"987f7a67a38fa564c849bb5d277c52ab9088a84368fc0be31a354125aebb12a0"},
+        {"sourceURL":"https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-osx-arm64-1.29.0.tgz","destination":"runtime/onnxruntime-osx-arm64-1.29.0.tgz","bytes":41578864,"sha256":"d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92"}
+      ]
+    },
+    {
+      "id": "multilingual-e5-small-ort-coreml",
+      "inheritsArtifactsFrom": "multilingual-e5-small-ort-cpu",
+      "model": "intfloat/multilingual-e5-small",
+      "modelRevision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+      "runtime": "ONNX Runtime Core ML execution provider",
+      "runtimeRevision": "1.29.0 official macOS arm64 dylib",
+      "license": "MIT",
+      "status": "benchmarkable",
+      "artifacts": []
+    },
+    {
+      "id": "swift-transformers-runtime-scope",
+      "model": "runtime feasibility boundary",
+      "runtime": "Swift Transformers without Core ML, MLX, or another tensor engine",
+      "status": "not-a-complete-runtime",
+      "reason": "Swift Transformers provides maintained tokenizer and model-configuration utilities used for parity, but is not by itself a maintained complete encoder execution and shipping pair. A bespoke tensor engine would create permanent model/runtime maintenance and is rejected.",
+      "artifacts": []
+    },
+    {
+      "id": "gte-multilingual-base-quality-ceiling",
+      "model": "Alibaba-NLP/gte-multilingual-base",
+      "runtime": "MLX or reproducible native Core ML conversion",
+      "status": "conditional-quality-ceiling",
+      "reason": "Evaluate only after compact-pair evidence exists; custom-code and footprint costs require a complete maintained shipping path.",
+      "artifacts": []
+    },
+    {
+      "id": "bge-m3-mlx-quality-ceiling",
+      "model": "BAAI/bge-m3",
+      "runtime": "MLXEmbedders",
+      "status": "conditional-quality-ceiling",
+      "reason": "Benchmark only if compact candidates expose a material multilingual quality ceiling worth the larger operational cost.",
+      "artifacts": []
+    }
+  ]
+}

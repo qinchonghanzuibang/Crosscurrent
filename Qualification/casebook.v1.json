@@ -21,14 +21,23 @@
     {"id":"ruan-409","source":"阮一峰的网络日志","url":"http://www.ruanyifeng.com/blog/2026/08/weekly-issue-409.html","revisionID":"0f428fe3-072b-4018-ba53-7a86096cccf6","contentHash":"fdf3b1a1f73c54ec55e78aba8d3111aca3e3d76cf16b6c3932872b8e01f9a9ea"},
     {"id":"ruan-408","source":"阮一峰的网络日志","url":"http://www.ruanyifeng.com/blog/2026/08/weekly-issue-408.html","revisionID":"537222b0-f6c1-477f-b114-bbfd43b9a693","contentHash":"b4df163eba3939742ff2b38f13234413f7e0e46d25c02f00ffce58b934f8a8c4"},
     {"id":"solidot-solar-birds","source":"Solidot","url":"https://www.solidot.org/story?sid=85152","revisionID":"e8979e4a-c7ca-4e36-9602-bb52dac28424","contentHash":"3b57949f9eb51ed5421b038b40d73e1b739eafe70ecbd3ef3957295bdfda0c3d"},
-    {"id":"hn-ai-jobs","source":"Hacker News","url":"https://www.pewresearch.org/short-reads/2026/08/18/young-adults-in-the-us-are-increasingly-wary-of-ai-concerned-it-will-take-jobs","revisionID":"a1e78872-a751-42ae-b31e-85755291b568","contentHash":"41b3aca19144ce9567e2797e47c0cec7eda85c31583b488f9423c38ef75a5a38"}
+    {"id":"hn-ai-jobs","source":"Hacker News","url":"https://www.pewresearch.org/short-reads/2026/08/18/young-adults-in-the-us-are-increasingly-wary-of-ai-concerned-it-will-take-jobs","revisionID":"a1e78872-a751-42ae-b31e-85755291b568","contentHash":"41b3aca19144ce9567e2797e47c0cec7eda85c31583b488f9423c38ef75a5a38"},
+    {"id":"hn-github-outage","source":"Hacker News","url":"https://github.blog/news-insights/company-news/the-august-17-outage-and-the-work-ahead","revisionID":"9ad2ecbe-9cfe-4e83-b9a1-d985d0cb3ac9","contentHash":"adacdd2a1a951272967ad07590bc5196bb5381fc99c907692252207b46afe66f"},
+    {"id":"solidot-github-outage","source":"奇客Solidot–传递最新科技情报","url":"https://www.solidot.org/story?sid=85147","revisionID":"ec0ce575-5cfd-419e-b6cb-6594b4bfe788","contentHash":"4e84f32a032f762e6cb2f7856d2639fe048cd1349048136b92aa726cfc39fbed"},
+    {"id":"hn-aliexpress-fingerprint","source":"Hacker News","url":"https://blog.laserphile.com/2026/08/aliexpress-webpage-keeping-multipoint.html","revisionID":"6f39eb7e-7b39-4e67-8d03-ece6ce96a4f9","contentHash":"fe8ce28c1eace8fe2e9aca4e0e7ec03d30d89d14fe29fb3583962c117bdbaebe"},
+    {"id":"solidot-aliexpress-fingerprint","source":"奇客Solidot–传递最新科技情报","url":"https://www.solidot.org/story?sid=85150","revisionID":"d344fd4f-36e4-458d-8417-2c3f921bbc0e","contentHash":"21f251ebf4d7c09cc4559f0d93672a70d401dcc91c490a46d620018457eb5451"},
+    {"id":"hn-early-life-stress","source":"Hacker News","url":"https://medicine.washu.edu/news/how-early-life-stress-leaves-a-scar-inside-brain-cells","revisionID":"0d294703-8898-4c5c-8056-05fa4584ba3b","contentHash":"fdaf0e07515d668bd833032d8e181e0be1e08b5dc19350d7047151dcd6b1a0b6"},
+    {"id":"solidot-early-life-stress","source":"奇客Solidot–传递最新科技情报","url":"https://www.solidot.org/story?sid=85138","revisionID":"f9bce833-4742-43d8-a96b-b8ade9901440","contentHash":"968826de8d7eff5f2de04704fe8abd21fafd627e8df7d3328cac45646e38cc6c"}
   ],
   "duplicateJudgments": [
     {"left":"webkit-249","right":"webkit-250","expected":"unrelated","note":"successive releases are hard negatives"},
     {"left":"arxiv-conceptguard","right":"arxiv-gcarl","expected":"unrelated","note":"same category and date, different papers"},
     {"left":"arxiv-third-restructuring","right":"arxiv-agent-docs","expected":"unrelated","note":"same software-agents vocabulary, distinct research"},
     {"left":"ruan-408","right":"ruan-409","expected":"unrelated","note":"weekly roundups are distinct Events"},
-    {"left":"cloudflare-oauth","right":"cloudflare-spectre","expected":"unrelated","note":"same publisher, unrelated announcements"}
+    {"left":"cloudflare-oauth","right":"cloudflare-spectre","expected":"unrelated","note":"same publisher, unrelated announcements"},
+    {"left":"hn-github-outage","right":"solidot-github-outage","expected":"independentCoverage","note":"English first-party outage evidence and Chinese independent coverage belong to one Event"},
+    {"left":"hn-aliexpress-fingerprint","right":"solidot-aliexpress-fingerprint","expected":"independentCoverage","note":"English report and Chinese independent coverage belong to one Event"},
+    {"left":"hn-early-life-stress","right":"solidot-early-life-stress","expected":"independentCoverage","note":"English research coverage and Chinese independent coverage belong to one Event"}
   ],
   "eventMembershipJudgments": [
     {"event":"webkit-250","members":["webkit-250"],"expectedPrimary":"webkit-250"},

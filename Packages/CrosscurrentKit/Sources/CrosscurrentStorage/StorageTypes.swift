@@ -231,6 +231,41 @@ public struct QualificationEvidenceRecord: Codable, Hashable, Sendable {
     }
 }
 
+/// Full normalized evidence available only from the developer's gitignored
+/// qualification database. It is intentionally never emitted into the tracked
+/// URL/hash manifest.
+public struct QualificationEmbeddingRecord: Codable, Hashable, Sendable {
+    public struct Segment: Codable, Hashable, Sendable {
+        public var id: ItemSegmentID
+        public var hash: String
+        public var text: String
+
+        public init(id: ItemSegmentID, hash: String, text: String) {
+            self.id = id
+            self.hash = hash
+            self.text = text
+        }
+    }
+
+    public var itemRevisionID: ItemRevisionID
+    public var canonicalURL: URL?
+    public var title: String
+    public var text: String
+    public var languageCode: String?
+    public var contentHash: String
+    public var segments: [Segment]
+
+    public init(itemRevisionID: ItemRevisionID, canonicalURL: URL?, title: String, text: String, languageCode: String?, contentHash: String, segments: [Segment]) {
+        self.itemRevisionID = itemRevisionID
+        self.canonicalURL = canonicalURL
+        self.title = title
+        self.text = text
+        self.languageCode = languageCode
+        self.contentHash = contentHash
+        self.segments = segments
+    }
+}
+
 public struct ActivePrompt: Codable, Hashable, Sendable {
     public var template: PromptTemplate
     public var revision: PromptRevision

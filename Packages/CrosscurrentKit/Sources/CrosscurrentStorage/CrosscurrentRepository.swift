@@ -243,10 +243,9 @@ public actor CrosscurrentRepository {
                 resolved = entityID
             }
             if let resolved, let sourceID, let sourceRole {
-                let relationshipKey = "structured:\(sourceID.description):\(resolved.description):\(sourceRole.rawValue)"
                 try db.execute(
                     sql: "INSERT OR IGNORE INTO source_entities (id, source_id, entity_id, role, provenance, confidence) VALUES (?, ?, ?, ?, ?, ?)",
-                    arguments: [relationshipKey, sourceID.description, resolved.description, sourceRole.rawValue, provenance.rawValue, confidence.value]
+                    arguments: [UUID().uuidString.lowercased(), sourceID.description, resolved.description, sourceRole.rawValue, provenance.rawValue, confidence.value]
                 )
             }
         }
@@ -1081,17 +1080,25 @@ public actor CrosscurrentRepository {
                 arguments: [relationID, ordered[0], ordered[1], relationship, confidence.value]
             )
             guard groupsAsDuplicate else { return }
-            let existingGroup: String? = try String.fetchOne(
+            let existingGroups = try String.fetchAll(
                 db,
-                sql: "SELECT group_id FROM duplicate_group_members WHERE item_id IN (?, ?) ORDER BY group_id LIMIT 1",
+                sql: "SELECT DISTINCT group_id FROM duplicate_group_members WHERE item_id IN (?, ?) ORDER BY group_id",
                 arguments: [ordered[0], ordered[1]]
             )
-            let groupID = existingGroup ?? "duplicate:\(ordered[0]):\(ordered[1])"
-            if existingGroup == nil {
+            let groupID = existingGroups.first ?? "duplicate:\(ordered[0]):\(ordered[1])"
+            if existingGroups.isEmpty {
                 try db.execute(
                     sql: "INSERT OR IGNORE INTO duplicate_groups (id, canonical_item_id, created_at) VALUES (?, ?, ?)",
                     arguments: [groupID, ordered[0], date.timeIntervalSince1970]
                 )
+            }
+            for mergedGroupID in existingGroups.dropFirst() {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO duplicate_group_members (group_id, item_id, classification) SELECT ?, item_id, classification FROM duplicate_group_members WHERE group_id=?",
+                    arguments: [groupID, mergedGroupID]
+                )
+                try db.execute(sql: "DELETE FROM duplicate_group_members WHERE group_id=?", arguments: [mergedGroupID])
+                try db.execute(sql: "DELETE FROM duplicate_groups WHERE id=?", arguments: [mergedGroupID])
             }
             for itemID in ordered {
                 try db.execute(
@@ -1866,6 +1873,49 @@ public actor CrosscurrentRepository {
                     revisionOrdinal: row["ordinal"],
                     contentHash: row["content_hash"],
                     segmentHashes: segmentHashes
+                )
+            }
+        }
+    }
+
+    public func qualificationEmbeddingEvidence() throws -> [QualificationEmbeddingRecord] {
+        try database.pool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT i.canonical_key, r.id, r.title, r.plain_text, r.language_code, r.content_hash
+                FROM items i
+                JOIN item_revisions r ON r.id=i.current_revision_id
+                WHERE i.remote_state != 'deleted' AND i.user_deletion_state='active'
+                ORDER BY r.id
+                """
+            )
+            return try rows.map { row in
+                guard let revisionID = Self.identifier(ItemRevisionID.self, row["id"])
+                else { throw CrosscurrentStorageError.corruptRecord("QualificationEmbeddingRecord") }
+                let segmentRows = try Row.fetchAll(
+                    db,
+                    sql: "SELECT id, segment_hash, text FROM item_segments WHERE item_revision_id=? ORDER BY ordinal",
+                    arguments: [revisionID.description]
+                )
+                let segments = try segmentRows.map { segmentRow in
+                    guard let segmentID = Self.identifier(ItemSegmentID.self, segmentRow["id"])
+                    else { throw CrosscurrentStorageError.corruptRecord("QualificationEmbeddingSegment") }
+                    return QualificationEmbeddingRecord.Segment(
+                        id: segmentID,
+                        hash: segmentRow["segment_hash"],
+                        text: segmentRow["text"]
+                    )
+                }
+                let canonical: String = row["canonical_key"]
+                return QualificationEmbeddingRecord(
+                    itemRevisionID: revisionID,
+                    canonicalURL: URL(string: canonical),
+                    title: row["title"],
+                    text: row["plain_text"],
+                    languageCode: row["language_code"],
+                    contentHash: row["content_hash"],
+                    segments: segments
                 )
             }
         }
