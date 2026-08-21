@@ -62,15 +62,24 @@ public actor TodayCoordinator {
             )
         })
         let snapshotByRevision = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.aggregate.revision.id, $0) })
+        var assigned = Set<EventRevisionID>()
         var entries: [DigestEntry] = []
-        entries += entriesFor(Array(ranked.prefix(5)), section: .today)
-        entries += entriesFor(ranked.filter { value in
+        func append(_ candidates: [RankedEvent], section: DigestSection, limit: Int, adding extraReason: RankingReason? = nil) {
+            guard entries.count < 15 else { return }
+            let available = min(limit, 15 - entries.count)
+            let selected = candidates.filter { !assigned.contains($0.revision.id) }.prefix(available)
+            for value in selected { assigned.insert(value.revision.id) }
+            entries += entriesFor(selected, section: section, adding: extraReason)
+        }
+
+        append(ranked, section: .today, limit: 5)
+        append(ranked.filter { value in
             now.timeIntervalSince(value.revision.endedAt ?? value.revision.startedAt ?? value.revision.createdAt) < 21_600
-        }.prefix(8), section: .emerging)
-        entries += entriesFor(ranked.filter { !(snapshotByRevision[$0.revision.id]?.followedPeople.isEmpty ?? true) }.prefix(12), section: .peopleYouFollow)
-        entries += entriesFor(ranked.filter { $0.reasons.contains(.primarySource) }.prefix(12), section: .worthReading)
-        entries += entriesFor(ranked.filter { snapshotByRevision[$0.revision.id]?.chinaGlobalCoverageSufficient == true }.prefix(8), section: .chinaGlobal, adding: .chinaGlobalCoverage)
-        entries += entriesFor(ranked.dropFirst(5), section: .everythingElse)
+        }, section: .emerging, limit: 3)
+        append(ranked.filter { !(snapshotByRevision[$0.revision.id]?.followedPeople.isEmpty ?? true) }, section: .peopleYouFollow, limit: 3)
+        append(ranked.filter { (snapshotByRevision[$0.revision.id]?.readerText.count ?? 0) >= 1_200 }, section: .worthReading, limit: 3)
+        append(ranked.filter { snapshotByRevision[$0.revision.id]?.chinaGlobalCoverageSufficient == true }, section: .chinaGlobal, limit: 2, adding: .chinaGlobalCoverage)
+        append(ranked, section: .everythingElse, limit: 15)
 
         let digestID = stored?.digest.id ?? DigestID()
         let revision = DigestRevision(digestID: digestID, parentRevisionID: parent, reason: reason, createdAt: now, entries: entries)

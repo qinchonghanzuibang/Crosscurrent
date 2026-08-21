@@ -7,3 +7,4 @@ xcuserdata/
 *.xcscmblueprint
 .swiftpm/
 Packages/CrosscurrentKit/.build/
+.crosscurrent-qualification/

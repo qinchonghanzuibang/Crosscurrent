@@ -9,11 +9,18 @@ public actor ArxivConnector: Connector {
     public init(http: any ConnectorHTTPClient = URLSessionConnectorHTTPClient()) { feed = FeedConnector(http: http) }
 
     public func discover(input: ConnectorDiscoveryInput, context: ConnectorContext) async throws -> ConnectorDiscoveryResult {
-        let query = Self.query(from: input.url)
-        guard let api = URL(string: "https://export.arxiv.org/api/query?search_query=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)&start=0&max_results=100&sortBy=submittedDate&sortOrder=descending") else { throw ConnectorError.unsupportedInput }
+        let request = Self.request(from: input.url)
+        var components = URLComponents(string: "https://export.arxiv.org/api/query")!
+        components.queryItems = request.queryItems + [
+            .init(name: "start", value: "0"),
+            .init(name: "max_results", value: "50"),
+            .init(name: "sortBy", value: "submittedDate"),
+            .init(name: "sortOrder", value: "descending"),
+        ]
+        guard let api = components.url else { throw ConnectorError.unsupportedInput }
         var result = try await feed.discover(input: .init(url: api), context: context)
         result.source.kind = .query
-        result.endpoints = result.endpoints.map { endpoint in var endpoint = endpoint; endpoint.connector = .arxiv; endpoint.externalID = query; endpoint.canonicalURL = api; return endpoint }
+        result.endpoints = result.endpoints.map { endpoint in var endpoint = endpoint; endpoint.connector = .arxiv; endpoint.externalID = request.identity; endpoint.canonicalURL = api; return endpoint }
         return result
     }
     public func authenticate(accountID _: ConnectorAccountID, context _: ConnectorContext) async throws {}
@@ -21,7 +28,25 @@ public actor ArxivConnector: Connector {
     public func fetchContent(candidate: ConnectorItemCandidate, context: ConnectorContext) async throws -> ConnectorItemCandidate { try await feed.fetchContent(candidate: candidate, context: context) }
     public func healthCheck(accountID _: ConnectorAccountID?) async -> ConnectorHealth { .healthy }
     public func disconnect(accountID _: ConnectorAccountID) async throws {}
-    private static func query(from url: URL) -> String { url.lastPathComponent.isEmpty ? "all:*" : "au:\(url.lastPathComponent)" }
+    private struct Request {
+        var identity: String
+        var queryItems: [URLQueryItem]
+    }
+
+    private static func request(from url: URL) -> Request {
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        if let search = components?.queryItems?.first(where: { $0.name == "search_query" })?.value, !search.isEmpty {
+            return Request(identity: search, queryItems: [.init(name: "search_query", value: search)])
+        }
+        let parts = url.pathComponents.filter { $0 != "/" }
+        if parts.first == "abs", let paperID = parts.dropFirst().first {
+            return Request(identity: "paper:\(paperID)", queryItems: [.init(name: "id_list", value: paperID)])
+        }
+        if parts.first == "list", let category = parts.dropFirst().first {
+            return Request(identity: "cat:\(category)", queryItems: [.init(name: "search_query", value: "cat:\(category)")])
+        }
+        return Request(identity: "all:*", queryItems: [.init(name: "search_query", value: "all:*")])
+    }
 }
 
 public actor HackerNewsConnector: Connector {

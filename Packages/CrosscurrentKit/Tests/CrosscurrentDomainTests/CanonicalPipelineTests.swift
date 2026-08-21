@@ -8,6 +8,36 @@ import CrosscurrentStorage
 import Foundation
 import Testing
 
+private struct DiscoveryHTTPClient: ConnectorHTTPClient {
+    let feedURL = URL(string: "https://example.com/feed.xml")!
+
+    func get(_ url: URL, headers _: [String: String]) async throws -> ConnectorHTTPResponse {
+        let xml = """
+        <?xml version="1.0"?><rss version="2.0"><channel><title>Real Preview</title><link>https://example.com</link><description>Preview only</description>
+        <item><guid>preview-1</guid><title>Preview Item</title><link>https://example.com/item</link><description>Evidence sample</description></item>
+        </channel></rss>
+        """
+        return ConnectorHTTPResponse(data: Data(xml.utf8), statusCode: 200, headers: ["Content-Type": "application/rss+xml"], finalURL: url)
+    }
+}
+
+@Test
+func sourceDiscoveryPreviewDoesNotPersistUntilExplicitCommit() async throws {
+    let (repository, _) = try makeRepository()
+    let http = DiscoveryHTTPClient()
+    let registry = ConnectorRegistry()
+    await registry.register(FeedConnector(http: http))
+    let discovery = SourceDiscoveryService(repository: repository, connectors: registry, http: http)
+
+    let preview = try await discovery.preview(.init(url: http.feedURL), context: ConnectorContext())
+    #expect(preview.result.sourceRevision.displayName == "Real Preview")
+    #expect(try await repository.sourceSnapshots().isEmpty)
+
+    _ = try await discovery.commit(preview, action: .subscribe)
+    #expect(try await repository.sourceSnapshots().count == 1)
+    #expect(try await repository.qualificationEvidenceRecords().count == 1)
+}
+
 @Test
 func canonicalEvidenceBecomesEventTodayAndCurrentSearchWithoutAProvider() async throws {
     let (repository, locations) = try makeRepository()
@@ -117,6 +147,43 @@ func ingestionCreatesStableRevisionsSanitizedEvidenceTopicsAndMetrics() async th
     #expect(revision.createdRevision)
     #expect(revision.revision?.ordinal == 2)
     #expect(revision.revision?.changeKind == .contentUpdate)
+}
+
+@Test
+func providerFreeEnrichmentAndDeduplicationFeedCanonicalClusteringSignals() async throws {
+    let (repository, _) = try makeRepository()
+    let firstSource = SourceID()
+    let firstEndpoint = SourceEndpointID()
+    let secondSource = SourceID()
+    let secondEndpoint = SourceEndpointID()
+    try await seedSource(repository, sourceID: firstSource, endpointID: firstEndpoint, name: "Official Systems Lab")
+    try await seedSource(repository, sourceID: secondSource, endpointID: secondEndpoint, name: "Syndication Mirror")
+    let pipeline = IngestionPipeline(repository: repository)
+    let candidate = ConnectorItemCandidate(
+        externalID: "release-42",
+        canonicalURL: URL(string: "https://systems.example/releases/42"),
+        title: "Ari Chen releases deterministic index format",
+        author: "Ari Chen",
+        contentText: "Ari Chen released a deterministic index format with exact revision provenance.",
+        languageCode: "en",
+        topicNames: ["Search Infrastructure"]
+    )
+    _ = try await pipeline.ingest(candidate: candidate, sourceID: firstSource, endpointID: firstEndpoint)
+    var mirror = candidate
+    mirror.externalID = "mirror-release-42"
+    _ = try await pipeline.ingest(candidate: mirror, sourceID: secondSource, endpointID: secondEndpoint)
+
+    let entities = try await repository.entitySnapshots()
+    #expect(entities.contains { $0.revision.displayName == "Ari Chen" })
+    #expect(entities.contains { $0.revision.displayName == "systems.example" })
+    let beforeDeduplication = try await repository.pendingEvidenceSegments()
+    #expect(beforeDeduplication.allSatisfy { !$0.entityIDs.isEmpty && !$0.topicIDs.isEmpty })
+
+    let result = try await EvidenceDeduplicationService(repository: repository).run()
+    #expect(result.pairsClassified == 1)
+    #expect(result.duplicateFamiliesUpdated == 1)
+    let afterDeduplication = try await repository.pendingEvidenceSegments()
+    #expect(Set(afterDeduplication.map(\.independenceGroup)).count == 1)
 }
 
 private func makeRepository() throws -> (CrosscurrentRepository, DatabaseLocations) {

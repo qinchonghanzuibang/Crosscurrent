@@ -22,10 +22,12 @@ public struct IngestionResult: Sendable {
 public actor IngestionPipeline {
     private let repository: CrosscurrentRepository
     private let blobStore: CanonicalBlobStore?
+    private let enrichment: ProviderFreeEnrichmentStage
 
     public init(repository: CrosscurrentRepository, blobStore: CanonicalBlobStore? = nil) {
         self.repository = repository
         self.blobStore = blobStore
+        enrichment = ProviderFreeEnrichmentStage(repository: repository)
     }
 
     public func ingest(candidate: ConnectorItemCandidate, sourceID: SourceID, endpointID: SourceEndpointID, fetchedAt: Date = .now) async throws -> IngestionResult {
@@ -91,6 +93,14 @@ public actor IngestionPipeline {
                 sanitizedHTMLBlobID: htmlBlob?.id,
                 idempotencyKey: "item:\(endpointID):\(candidate.externalID):\(contentHash)"
             )
+            if createdRevision {
+                try await enrichment.enrich(
+                    candidate: candidate,
+                    sourceID: sourceID,
+                    revision: value,
+                    segments: segments
+                )
+            }
             revision = value
         }
 

@@ -66,11 +66,10 @@ struct CrosscurrentApp: App {
 final class AppModel: ObservableObject {
     @Published var selection: SidebarDestination? = .today
     @Published var selectedEventID: EventID?
-    #if DEBUG
-    @Published var events = FixtureLibrary.events
-    #else
     @Published var events: [EventCardModel] = []
-    #endif
+    @Published var digestSections: [DigestSection: [EventCardModel]] = [:]
+    @Published var sourcePreview: SourceDiscoveryPreview?
+    @Published var sourceDiscoveryInProgress = false
     @Published var digestRevisionReason: DigestRevisionReason = .initialDaily
     @Published var digestUpdatedAt = Date.now
     @Published var providerConfigured = false
@@ -112,7 +111,7 @@ final class AppModel: ObservableObject {
         updaterController = SPUStandardUpdaterController(startingUpdater: configured, updaterDelegate: nil, userDriverDelegate: nil)
         updateStatus = configured ? String(localized: "Automatic signed updates enabled") : String(localized: "Release feed not configured")
         #if DEBUG
-        if Self.fixtureState == "empty" { events = [] }
+        if Self.fixtureState != "off" { events = FixtureLibrary.events }
         #endif
     }
 
@@ -144,8 +143,8 @@ final class AppModel: ObservableObject {
             let browser = BrowserCreatorSessionXPCClient(teamID: teamID.isEmpty ? "TEAMID_REQUIRED" : teamID, signingMode: CCSigningEnvironment.currentMode)
             browserClient = browser
             let connectors = await ConnectorCatalog.production(browser: browser, http: http)
-            refreshExecutor = RefreshJobExecutor(repository: repository, connectors: connectors, blobStore: blobStore)
-            discoveryService = SourceDiscoveryService(repository: repository, connectors: connectors, blobStore: blobStore)
+            refreshExecutor = RefreshJobExecutor(repository: repository, connectors: connectors, blobStore: blobStore, http: http)
+            discoveryService = SourceDiscoveryService(repository: repository, connectors: connectors, blobStore: blobStore, http: http)
             let maintainer = EvidenceEventMaintainer(repository: repository)
             eventMaintainer = maintainer
             correctionService = ManualEventCorrectionService(repository: repository)
@@ -157,7 +156,7 @@ final class AppModel: ObservableObject {
             let shareImporter = ShareInboxImporter(locations: locations, repository: repository, leaseOwner: "main-share-import")
             _ = try await shareImporter.importAvailable()
             #if DEBUG
-            if Self.fixtureState != "empty" { try await seedDevelopmentLibrary(repository) }
+            if Self.fixtureState != "off" { try await seedDevelopmentLibrary(repository) }
             #endif
             for prompt in BundledPromptCatalog.all {
                 _ = try await repository.savePrompt(template: prompt.template, revision: prompt.revision, makeActive: true, idempotencyKey: "bundled-prompt:\(prompt.revision.id)")
@@ -232,6 +231,7 @@ final class AppModel: ObservableObject {
                 guard let update = try await todayCoordinator?.update(trigger: .manualRefresh, schedule: briefingSchedule) else { return }
                 digestRevisionReason = update.revision.reason
                 digestUpdatedAt = update.revision.createdAt
+                try await reloadCanonicalEvents()
             } catch { startupError = error.localizedDescription }
         }
     }
@@ -254,6 +254,7 @@ final class AppModel: ObservableObject {
             if current[.digests] != previous[.digests], let state = try await repository.digestState(briefingDay: Calendar.autoupdatingCurrent.startOfDay(for: .now)) {
                 digestRevisionReason = state.latestRevision.reason
                 digestUpdatedAt = state.latestRevision.createdAt
+                try await reloadCanonicalEvents()
             }
         } catch {
             startupError = error.localizedDescription
@@ -531,7 +532,15 @@ final class AppModel: ObservableObject {
     }
 
     func addSource(_ input: String) async -> String {
+        let previewStatus = await previewSource(input)
+        guard sourcePreview != nil else { return previewStatus }
+        return await subscribeSourcePreview()
+    }
+
+    func previewSource(_ input: String) async -> String {
         guard let url = URL(string: input), let discoveryService else { return String(localized: "Enter a valid Source URL.") }
+        sourceDiscoveryInProgress = true
+        defer { sourceDiscoveryInProgress = false }
         do {
             let platform = Self.authenticatedPlatform(for: url)
             var accountID: ConnectorAccountID?
@@ -546,13 +555,27 @@ final class AppModel: ObservableObject {
                     return String(localized: "Login window opened. Complete authentication, then choose Add and Refresh again.")
                 }
             }
-            let result = try await discoveryService.discover(.init(url: url, accountID: accountID), context: ConnectorContext(allowsUserInteraction: true))
-            if let platform { pendingBrowserAccounts[platform] = nil }
-            try await reloadCanonicalLibrary()
-            if let endpoint = result.endpoints.first { try await foregroundRefresh(endpointID: endpoint.id) }
-            return String(localized: "Source added and refreshed.")
+            sourcePreview = try await discoveryService.preview(.init(url: url, accountID: accountID), context: ConnectorContext(allowsUserInteraction: true))
+            return String(localized: "Source found. Review it before subscribing.")
         } catch { startupError = error.localizedDescription; return error.localizedDescription }
     }
+
+    func subscribeSourcePreview(action: SourceDiscoveryAction = .subscribe) async -> String {
+        guard let preview = sourcePreview, let discoveryService else { return String(localized: "Discover a Source first.") }
+        sourceDiscoveryInProgress = true
+        defer { sourceDiscoveryInProgress = false }
+        do {
+            let selectedAction = preview.availableActions.contains(action) ? action : (preview.availableActions.first ?? .subscribe)
+            let committed = try await discoveryService.commit(preview, action: selectedAction)
+            sourcePreview = nil
+            if let platform = Self.authenticatedPlatform(for: preview.inputURL) { pendingBrowserAccounts[platform] = nil }
+            try await reloadCanonicalLibrary()
+            if selectedAction != .importOnce, let endpoint = committed.endpointIDs.first { try await foregroundRefresh(endpointID: endpoint) }
+            return selectedAction == .importOnce ? String(localized: "Page imported.") : String(localized: "Source added and refreshed.")
+        } catch { startupError = error.localizedDescription; return error.localizedDescription }
+    }
+
+    func clearSourcePreview() { sourcePreview = nil }
 
     func importOPML(from url: URL) async -> String {
         guard let repository, let discoveryService else { return String(localized: "Storage is not ready") }
@@ -626,12 +649,20 @@ final class AppModel: ObservableObject {
         guard let repository else { return }
         let snapshots = try await repository.currentEventSnapshots(limit: 500)
         guard !snapshots.isEmpty else {
-            #if !DEBUG
             events = []
-            #endif
+            digestSections = [:]
             return
         }
-        events = snapshots.map(Self.eventCard)
+        let cards = snapshots.map(Self.eventCard)
+        events = cards
+        let byRevision = Dictionary(uniqueKeysWithValues: cards.map { ($0.revisionID, $0) })
+        if let state = try await repository.digestState(briefingDay: Calendar.autoupdatingCurrent.startOfDay(for: .now)) {
+            digestSections = Dictionary(grouping: state.latestRevision.entries, by: \.section).mapValues { entries in
+                entries.sorted { $0.rank < $1.rank }.compactMap { byRevision[$0.eventRevisionID] }
+            }
+        } else {
+            digestSections = [:]
+        }
     }
 
     private func reloadCanonicalLibrary() async throws {
@@ -721,7 +752,7 @@ final class AppModel: ObservableObject {
     #if DEBUG
     private static var fixtureState: String {
         let arguments = ProcessInfo.processInfo.arguments
-        guard let index = arguments.firstIndex(of: "--fixture-state"), arguments.indices.contains(index + 1) else { return "dense" }
+        guard let index = arguments.firstIndex(of: "--fixture-state"), arguments.indices.contains(index + 1) else { return "off" }
         return arguments[index + 1]
     }
 

@@ -29,12 +29,34 @@ public actor GitHubConnector: Connector {
 
     public func refresh(endpoint: SourceEndpoint, cursor: ConnectorCursor?, context: ConnectorContext) async throws -> ConnectorRefreshPage {
         let page = max(1, (try? cursor?.decode(Int.self)) ?? 1)
-        let parts = endpoint.externalID.split(separator: "/", omittingEmptySubsequences: true)
+        let endpointParts = endpoint.externalID.split(separator: "#", maxSplits: 1).map(String.init)
+        let identity = endpointParts[0]
+        let mode = endpointParts.count == 2 ? endpointParts[1] : "activity"
+        let parts = identity.split(separator: "/", omittingEmptySubsequences: true)
+        if parts.count == 2, mode == "releases" {
+            let url = URL(string: "https://api.github.com/repos/\(parts[0])/\(parts[1])/releases?per_page=20&page=\(page)")!
+            let response = try await http.get(url, headers: Self.headers)
+            let releases = try Self.decoder.decode([Release].self, from: response.data)
+            let candidates = releases.map { release in
+                ConnectorItemCandidate(
+                    externalID: "release:\(release.id)",
+                    canonicalURL: URL(string: release.htmlURL),
+                    title: release.name?.isEmpty == false ? release.name! : release.tagName,
+                    author: release.author?.login,
+                    publishedAt: release.publishedAt ?? release.createdAt,
+                    modifiedAt: release.updatedAt,
+                    summary: release.body,
+                    contentText: release.body,
+                    topicNames: ["release", release.tagName]
+                )
+            }
+            return ConnectorRefreshPage(candidates: candidates, nextCursor: try ConnectorCursor(family: "github-release-page-v1", value: page + 1), reachedEnd: releases.count < 20)
+        }
         let url: URL
         if parts.count == 2 {
-            url = URL(string: "https://api.github.com/repos/\(parts[0])/\(parts[1])/events?per_page=100&page=\(page)")!
+            url = URL(string: "https://api.github.com/repos/\(parts[0])/\(parts[1])/events?per_page=50&page=\(page)")!
         } else {
-            url = URL(string: "https://api.github.com/users/\(endpoint.externalID)/events/public?per_page=100&page=\(page)")!
+            url = URL(string: "https://api.github.com/users/\(identity)/events/public?per_page=50&page=\(page)")!
         }
         let response = try await http.get(url, headers: Self.headers)
         let events = try Self.decoder.decode([Event].self, from: response.data)
@@ -54,7 +76,7 @@ public actor GitHubConnector: Connector {
                 metricSnapshots: event.payload?.size.map { [.init(kind: .score, value: Double($0), connectorKey: "commit_count", capturedAt: context.now())] } ?? []
             )
         }
-        return ConnectorRefreshPage(candidates: candidates, nextCursor: try ConnectorCursor(family: "github-page-v1", value: page + 1), reachedEnd: events.count < 100)
+        return ConnectorRefreshPage(candidates: candidates, nextCursor: try ConnectorCursor(family: "github-page-v1", value: page + 1), reachedEnd: events.count < 50)
     }
 
     public func fetchContent(candidate: ConnectorItemCandidate, context _: ConnectorContext) async throws -> ConnectorItemCandidate { candidate }
@@ -66,11 +88,19 @@ public actor GitHubConnector: Connector {
         let source = LogicalSource(currentRevisionID: revisionID, kind: sourceKind)
         let revision = SourceRevision(id: revisionID, sourceID: source.id, displayName: name, summary: summary, avatarURL: avatarURL)
         let entity = Entity(kind: entityKind, displayName: name)
-        let endpoint = SourceEndpoint(sourceID: source.id, connector: .github, accountID: accountID, externalID: externalID, canonicalURL: canonicalURL, accessRequirement: .anonymous, contentPrivacy: .public)
+        let endpoints: [SourceEndpoint]
+        if sourceKind == .repository {
+            endpoints = [
+                SourceEndpoint(sourceID: source.id, connector: .github, accountID: accountID, externalID: "\(externalID)#releases", canonicalURL: canonicalURL?.appending(path: "releases"), accessRequirement: .anonymous, contentPrivacy: .public),
+                SourceEndpoint(sourceID: source.id, connector: .github, accountID: accountID, externalID: "\(externalID)#activity", canonicalURL: canonicalURL, accessRequirement: .anonymous, contentPrivacy: .public),
+            ]
+        } else {
+            endpoints = [SourceEndpoint(sourceID: source.id, connector: .github, accountID: accountID, externalID: externalID, canonicalURL: canonicalURL, accessRequirement: .anonymous, contentPrivacy: .public)]
+        }
         return ConnectorDiscoveryResult(
             source: source,
             sourceRevision: revision,
-            endpoints: [endpoint],
+            endpoints: endpoints,
             entityCandidates: [entity],
             sourceEntityRelationships: [.init(sourceID: source.id, entityID: entity.id, role: .represents, provenance: .connector, confidence: .certain)],
             aiClassification: .init(sourceID: source.id, accessRequirement: .anonymous, contentPrivacy: .public, provenance: .connector, confidence: .certain),
@@ -107,6 +137,26 @@ public actor GitHubConnector: Connector {
         var login: String; var name: String?; var bio: String?; var avatarURL: String?; var htmlURL: String; var type: String
         enum CodingKeys: String, CodingKey { case login, name, bio, type; case avatarURL = "avatar_url"; case htmlURL = "html_url" }
     }
+    private struct Release: Decodable {
+        struct Author: Decodable { var login: String? }
+        var id: Int
+        var name: String?
+        var tagName: String
+        var body: String?
+        var htmlURL: String
+        var createdAt: Date?
+        var publishedAt: Date?
+        var updatedAt: Date?
+        var author: Author?
+        enum CodingKeys: String, CodingKey {
+            case id, name, body, author
+            case tagName = "tag_name"
+            case htmlURL = "html_url"
+            case createdAt = "created_at"
+            case publishedAt = "published_at"
+            case updatedAt = "updated_at"
+        }
+    }
     private struct Event: Decodable {
         struct Actor: Decodable { var login: String?; var displayLogin: String?; enum CodingKeys: String, CodingKey { case login; case displayLogin = "display_login" } }
         struct Repository: Decodable { var name: String }
@@ -140,7 +190,7 @@ public actor RedditConnector: Connector {
     public func refresh(endpoint: SourceEndpoint, cursor: ConnectorCursor?, context: ConnectorContext) async throws -> ConnectorRefreshPage {
         let after = try? cursor?.decode(String?.self)
         var components = URLComponents(string: "https://www.reddit.com/r/\(endpoint.externalID)/new.json")!
-        components.queryItems = [.init(name: "limit", value: "100")] + ((after ?? nil).map { [.init(name: "after", value: $0)] } ?? [])
+        components.queryItems = [.init(name: "limit", value: "50")] + ((after ?? nil).map { [.init(name: "after", value: $0)] } ?? [])
         let response = try await http.get(components.url!, headers: ["Accept": "application/json"])
         let listing = try JSONDecoder().decode(Listing.self, from: response.data)
         let candidates = listing.data.children.map { wrapper in
@@ -206,7 +256,7 @@ public actor BlueskyConnector: Connector {
     public func authenticate(accountID _: ConnectorAccountID, context _: ConnectorContext) async throws {}
     public func refresh(endpoint: SourceEndpoint, cursor: ConnectorCursor?, context: ConnectorContext) async throws -> ConnectorRefreshPage {
         var components = URLComponents(string: "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed")!
-        var query: [URLQueryItem] = [.init(name: "actor", value: endpoint.externalID), .init(name: "limit", value: "100"), .init(name: "filter", value: "posts_and_author_threads")]
+        var query: [URLQueryItem] = [.init(name: "actor", value: endpoint.externalID), .init(name: "limit", value: "50"), .init(name: "filter", value: "posts_and_author_threads")]
         if let cursorValue = try? cursor?.decode(String.self) { query.append(.init(name: "cursor", value: cursorValue)) }
         components.queryItems = query
         let response = try await http.get(components.url!, headers: [:])

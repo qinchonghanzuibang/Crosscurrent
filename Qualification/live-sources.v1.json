@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "sources": [
+    { "id": "swift-blog", "url": "https://www.swift.org/atom.xml", "maximumSamples": 10 },
+    { "id": "webkit", "url": "https://webkit.org/feed/", "maximumSamples": 10 },
+    { "id": "cloudflare", "url": "https://blog.cloudflare.com/rss/", "maximumSamples": 10 },
+    { "id": "mozilla-hacks", "url": "https://hacks.mozilla.org/feed/", "maximumSamples": 10 },
+    { "id": "hugging-face", "url": "https://huggingface.co/blog/feed.xml", "maximumSamples": 10 },
+    { "id": "json-feed", "url": "https://www.jsonfeed.org/feed.json", "maximumSamples": 2 },
+    { "id": "ruanyifeng", "url": "https://www.ruanyifeng.com/blog/atom.xml", "maximumSamples": 10 },
+    { "id": "solidot", "url": "https://www.solidot.org/index.rss", "maximumSamples": 10 },
+    { "id": "meituan-tech", "url": "https://tech.meituan.com/", "maximumSamples": 1 },
+    { "id": "deepseek-news", "url": "https://api-docs.deepseek.com/news/", "maximumSamples": 1 },
+    { "id": "llama-cpp", "url": "https://github.com/ggml-org/llama.cpp", "maximumSamples": 10 },
+    { "id": "swift-transformers", "url": "https://github.com/huggingface/swift-transformers", "maximumSamples": 10 },
+    { "id": "swift-repository", "url": "https://github.com/swiftlang/swift", "maximumSamples": 10 },
+    { "id": "arxiv-cl", "url": "https://export.arxiv.org/api/query?search_query=cat:cs.CL&sortBy=submittedDate&sortOrder=descending", "maximumSamples": 20 },
+    { "id": "arxiv-se", "url": "https://export.arxiv.org/api/query?search_query=cat:cs.SE&sortBy=submittedDate&sortOrder=descending", "maximumSamples": 20 },
+    { "id": "hacker-news", "url": "https://news.ycombinator.com/", "maximumSamples": 20 },
+    { "id": "bluesky", "url": "https://bsky.app/profile/bsky.app", "maximumSamples": 20 },
+    { "id": "mozilla-bluesky", "url": "https://bsky.app/profile/mozilla.org", "maximumSamples": 20 }
+  ]
+}

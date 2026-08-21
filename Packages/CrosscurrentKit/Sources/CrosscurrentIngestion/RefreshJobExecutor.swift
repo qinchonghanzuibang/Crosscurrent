@@ -49,11 +49,13 @@ public actor RefreshJobExecutor {
     private let repository: CrosscurrentRepository
     private let connectors: ConnectorRegistry
     private let ingestion: IngestionPipeline
+    private let articleEnricher: ArticleContentEnricher
 
-    public init(repository: CrosscurrentRepository, connectors: ConnectorRegistry, blobStore: CanonicalBlobStore? = nil) {
+    public init(repository: CrosscurrentRepository, connectors: ConnectorRegistry, blobStore: CanonicalBlobStore? = nil, http: any ConnectorHTTPClient = URLSessionConnectorHTTPClient()) {
         self.repository = repository
         self.connectors = connectors
         ingestion = IngestionPipeline(repository: repository, blobStore: blobStore)
+        articleEnricher = ArticleContentEnricher(http: http)
     }
 
     public func execute(job: DurableJob, lease initialLease: JobLease) async throws -> RefreshJobCheckpoint {
@@ -75,7 +77,8 @@ public actor RefreshJobExecutor {
 
             let page = try await connector.refresh(endpoint: endpoint, cursor: cursor, context: ConnectorContext())
             for candidate in page.candidates {
-                let complete = try await connector.fetchContent(candidate: candidate, context: ConnectorContext())
+                let fetched = try await connector.fetchContent(candidate: candidate, context: ConnectorContext())
+                let complete = try await articleEnricher.enrich(fetched, connector: endpoint.connector)
                 let result = try await ingestion.ingest(candidate: complete, sourceID: endpoint.sourceID, endpointID: endpoint.id)
                 candidateCount += 1
                 if result.createdRevision { revisionCount += 1 }

@@ -191,6 +191,117 @@ public actor CrosscurrentRepository {
         }
     }
 
+    /// Resolves a high-confidence structured identity without requiring an AI provider. The
+    /// alias lookup and creation happen in one canonical write transaction so concurrent
+    /// refresh paths cannot create a second identity inside this writer.
+    public func resolveOrCreateEntity(
+        displayName: String,
+        kind: EntityKind,
+        languageCode: String?,
+        sourceID: SourceID? = nil,
+        sourceRole: SourceEntityRole? = nil,
+        provenance: AssertionProvenance = .connector,
+        confidence: Confidence = Confidence(0.9),
+        at date: Date = .now
+    ) throws -> EntityID? {
+        let display = displayName.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = Self.normalizedAssertionName(display)
+        guard normalized.count >= 2 else { return nil }
+        var resolved: EntityID?
+        _ = try mutate(domains: [.entities, .sources, .searchInputs]) { db in
+            if let stored: String = try String.fetchOne(
+                db,
+                sql: "SELECT entity_id FROM entity_aliases WHERE normalized_value=? ORDER BY confidence DESC LIMIT 1",
+                arguments: [normalized]
+            ) {
+                resolved = Self.identifier(EntityID.self, stored)
+            } else {
+                let entityID = EntityID()
+                let revisionID = EntityRevisionID()
+                try db.execute(
+                    sql: "INSERT INTO entities (id, current_revision_id, kind, normalized_name, is_followed, created_at) VALUES (?, ?, ?, ?, 0, ?)",
+                    arguments: [entityID.description, revisionID.description, kind.rawValue, normalized, date.timeIntervalSince1970]
+                )
+                try db.execute(
+                    sql: "INSERT INTO entity_revisions (id, entity_id, display_name, summary, external_identifiers_json, created_at) VALUES (?, ?, ?, NULL, NULL, ?)",
+                    arguments: [revisionID.description, entityID.description, display, date.timeIntervalSince1970]
+                )
+                try db.execute(
+                    sql: "INSERT INTO entity_aliases (id, entity_id, value, normalized_value, language_code, script_code, provenance, confidence, valid_from, valid_until) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)",
+                    arguments: [EntityAliasID().description, entityID.description, display, normalized, languageCode, provenance.rawValue, confidence.value, date.timeIntervalSince1970]
+                )
+                try Self.upsertSearchInput(
+                    stableID: entityID.description,
+                    kind: kind.rawValue,
+                    revisionID: revisionID.description,
+                    languageCode: languageCode,
+                    title: display,
+                    body: "",
+                    inputHash: HTTPMetadataRedactor.digest(Data(normalized.utf8)),
+                    db: db
+                )
+                resolved = entityID
+            }
+            if let resolved, let sourceID, let sourceRole {
+                let relationshipKey = "structured:\(sourceID.description):\(resolved.description):\(sourceRole.rawValue)"
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO source_entities (id, source_id, entity_id, role, provenance, confidence) VALUES (?, ?, ?, ?, ?, ?)",
+                    arguments: [relationshipKey, sourceID.description, resolved.description, sourceRole.rawValue, provenance.rawValue, confidence.value]
+                )
+            }
+        }
+        return resolved
+    }
+
+    public func entityAliasesForEnrichment(sourceID: SourceID, limit: Int = 2_000) throws -> [StoredEntityAlias] {
+        try database.pool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT ea.entity_id, e.kind, ea.value, ea.normalized_value, ea.confidence,
+                       CASE WHEN se.source_id IS NULL THEN 1 ELSE 0 END AS unlinked
+                FROM entity_aliases ea
+                JOIN entities e ON e.id=ea.entity_id
+                LEFT JOIN source_entities se ON se.entity_id=ea.entity_id AND se.source_id=?
+                WHERE ea.valid_until IS NULL
+                ORDER BY unlinked ASC, ea.confidence DESC, LENGTH(ea.normalized_value) DESC
+                LIMIT ?
+                """,
+                arguments: [sourceID.description, max(1, min(limit, 10_000))]
+            )
+            return try rows.map { row in
+                guard let entityID = Self.identifier(EntityID.self, row["entity_id"]),
+                      let kind = EntityKind(rawValue: row["kind"])
+                else { throw CrosscurrentStorageError.corruptRecord("StoredEntityAlias") }
+                return StoredEntityAlias(
+                    entityID: entityID,
+                    kind: kind,
+                    value: row["value"],
+                    normalizedValue: row["normalized_value"],
+                    confidence: Confidence(row["confidence"])
+                )
+            }
+        }
+    }
+
+    @discardableResult
+    public func saveItemEntityMentions(_ mentions: [ItemEntityMention], idempotencyKey: String? = nil) throws -> Bool {
+        guard !mentions.isEmpty else { return false }
+        return try mutate(domains: [.entities, .items], idempotencyKey: idempotencyKey) { db in
+            for mention in mentions {
+                try db.execute(
+                    sql: """
+                    INSERT OR IGNORE INTO item_entity_mentions
+                      (id, item_revision_id, item_segment_id, entity_id, utf8_start, utf8_length,
+                       excerpt_hash, mentioned_text, provenance, confidence)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    arguments: [mention.id.uuidString.lowercased(), mention.itemRevisionID.description, mention.itemSegmentID.description, mention.entityID.description, mention.span.utf8Start, mention.span.utf8Length, mention.span.excerptHash, mention.mentionedText, mention.provenance.rawValue, mention.confidence.value]
+                )
+            }
+        }
+    }
+
     @discardableResult
     public func saveTopic(_ topic: Topic, revision: TopicRevision, aliases: [TopicAlias] = [], idempotencyKey: String? = nil) throws -> Bool {
         try mutate(domains: [.topics, .searchInputs], idempotencyKey: idempotencyKey) { db in
@@ -880,6 +991,83 @@ public actor CrosscurrentRepository {
         }
     }
 
+    public func currentItemDeduplicationEvidence(limit: Int = 1_000) throws -> [CurrentItemDeduplicationEvidence] {
+        try database.pool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT i.id AS item_id, i.source_id, i.connector_external_id, i.canonical_key,
+                       ir.id AS revision_id, ir.title, ir.author, ir.plain_text, ir.content_hash,
+                       ir.language_code, ir.published_at
+                FROM items i JOIN item_revisions ir ON ir.id=i.current_revision_id
+                WHERE i.remote_state != 'deleted' AND i.user_deletion_state='active'
+                ORDER BY COALESCE(ir.published_at, ir.fetched_at) DESC
+                LIMIT ?
+                """,
+                arguments: [max(1, min(limit, 10_000))]
+            )
+            return try rows.map { row in
+                guard let itemID = Self.identifier(ItemID.self, row["item_id"]),
+                      let revisionID = Self.identifier(ItemRevisionID.self, row["revision_id"]),
+                      let sourceID = Self.identifier(SourceID.self, row["source_id"])
+                else { throw CrosscurrentStorageError.corruptRecord("CurrentItemDeduplicationEvidence") }
+                let canonical: String = row["canonical_key"]
+                return CurrentItemDeduplicationEvidence(
+                    itemID: itemID,
+                    revisionID: revisionID,
+                    sourceID: sourceID,
+                    externalID: row["connector_external_id"],
+                    canonicalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
+                    title: row["title"],
+                    author: row["author"],
+                    text: row["plain_text"],
+                    contentHash: row["content_hash"],
+                    languageCode: row["language_code"],
+                    publishedAt: (row["published_at"] as Double?).map(Date.init(timeIntervalSince1970:))
+                )
+            }
+        }
+    }
+
+    @discardableResult
+    public func saveItemRelation(
+        from fromItemID: ItemID,
+        to toItemID: ItemID,
+        relationship: String,
+        confidence: Confidence,
+        groupsAsDuplicate: Bool,
+        at date: Date = .now
+    ) throws -> Bool {
+        guard fromItemID != toItemID else { return false }
+        let ordered = [fromItemID.description, toItemID.description].sorted()
+        let relationID = "relation:\(ordered[0]):\(ordered[1]):\(relationship)"
+        return try mutate(domains: [.items, .events]) { db in
+            try db.execute(
+                sql: "INSERT OR IGNORE INTO item_relations (id, from_item_id, to_item_id, relationship, confidence) VALUES (?, ?, ?, ?, ?)",
+                arguments: [relationID, ordered[0], ordered[1], relationship, confidence.value]
+            )
+            guard groupsAsDuplicate else { return }
+            let existingGroup: String? = try String.fetchOne(
+                db,
+                sql: "SELECT group_id FROM duplicate_group_members WHERE item_id IN (?, ?) ORDER BY group_id LIMIT 1",
+                arguments: [ordered[0], ordered[1]]
+            )
+            let groupID = existingGroup ?? "duplicate:\(ordered[0]):\(ordered[1])"
+            if existingGroup == nil {
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO duplicate_groups (id, canonical_item_id, created_at) VALUES (?, ?, ?)",
+                    arguments: [groupID, ordered[0], date.timeIntervalSince1970]
+                )
+            }
+            for itemID in ordered {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO duplicate_group_members (group_id, item_id, classification) VALUES (?, ?, ?)",
+                    arguments: [groupID, itemID, relationship]
+                )
+            }
+        }
+    }
+
     public func pendingEvidenceSegments(limit: Int = 250) throws -> [PendingEvidenceSegment] {
         try database.pool.read { db in
             let rows = try Row.fetchAll(
@@ -953,7 +1141,10 @@ public actor CrosscurrentRepository {
                     sourceID: sourceID,
                     sourceName: row["source_name"],
                     canonicalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
-                    accountID: Self.identifier(ConnectorAccountID.self, row["account_id"] as String?)
+                    accountID: Self.identifier(ConnectorAccountID.self, row["account_id"] as String?),
+                    entityIDs: Set(try String.fetchAll(db, sql: "SELECT DISTINCT entity_id FROM item_entity_mentions WHERE item_revision_id=? AND item_segment_id=?", arguments: [revisionID.description, segmentID.description]).compactMap { Self.identifier(EntityID.self, $0) }),
+                    topicIDs: Set(try String.fetchAll(db, sql: "SELECT DISTINCT topic_id FROM item_topic_assertions WHERE item_revision_id=? AND (item_segment_id IS NULL OR item_segment_id=?)", arguments: [revisionID.description, segmentID.description]).compactMap { Self.identifier(TopicID.self, $0) }),
+                    independenceGroup: try String.fetchOne(db, sql: "SELECT group_id FROM duplicate_group_members WHERE item_id=? LIMIT 1", arguments: [itemID.description]) ?? sourceID.description
                 )
             }
         }
@@ -983,6 +1174,32 @@ public actor CrosscurrentRepository {
                     memberships: memberships
                 )
             }
+        }
+    }
+
+    public func clusteringSignals(eventRevisionID: EventRevisionID) throws -> StoredClusteringSignals {
+        try database.pool.read { db in
+            let entityValues = try String.fetchAll(
+                db,
+                sql: """
+                SELECT DISTINCT iem.entity_id
+                FROM event_revision_memberships erm
+                JOIN event_membership_assertions ema ON ema.id=erm.membership_assertion_id
+                JOIN item_entity_mentions iem ON iem.item_revision_id=ema.item_revision_id
+                  AND iem.item_segment_id=ema.item_segment_id
+                WHERE erm.event_revision_id=?
+                """,
+                arguments: [eventRevisionID.description]
+            )
+            let topicValues = try String.fetchAll(
+                db,
+                sql: "SELECT DISTINCT topic_id FROM event_topic_assertions WHERE event_revision_id=?",
+                arguments: [eventRevisionID.description]
+            )
+            return StoredClusteringSignals(
+                entityIDs: Set(entityValues.compactMap { Self.identifier(EntityID.self, $0) }),
+                topicIDs: Set(topicValues.compactMap { Self.identifier(TopicID.self, $0) })
+            )
         }
     }
 
@@ -1419,6 +1636,46 @@ public actor CrosscurrentRepository {
         }
     }
 
+    public func qualificationEvidenceRecords() throws -> [QualificationEvidenceRecord] {
+        try database.pool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT i.id AS item_id, i.canonical_key, i.current_revision_id,
+                       r.ordinal, r.content_hash, sr.display_name, e.connector_kind
+                FROM items i
+                JOIN item_revisions r ON r.id=i.current_revision_id
+                JOIN source_revisions sr ON sr.id=(SELECT current_revision_id FROM sources WHERE id=i.source_id)
+                JOIN source_endpoints e ON e.id=i.endpoint_id
+                ORDER BY sr.display_name, r.published_at DESC, i.id
+                """
+            )
+            return try rows.map { row in
+                guard
+                    let itemID = Self.identifier(ItemID.self, row["item_id"]),
+                    let revisionID = Self.identifier(ItemRevisionID.self, row["current_revision_id"]),
+                    let connector = ConnectorKind(rawValue: row["connector_kind"])
+                else { throw CrosscurrentStorageError.corruptRecord("QualificationEvidence") }
+                let segmentHashes = try String.fetchAll(
+                    db,
+                    sql: "SELECT segment_hash FROM item_segments WHERE item_revision_id=? ORDER BY ordinal",
+                    arguments: [revisionID.description]
+                )
+                let canonical: String = row["canonical_key"]
+                return QualificationEvidenceRecord(
+                    sourceName: row["display_name"],
+                    connector: connector,
+                    canonicalURL: URL(string: canonical),
+                    itemID: itemID,
+                    itemRevisionID: revisionID,
+                    revisionOrdinal: row["ordinal"],
+                    contentHash: row["content_hash"],
+                    segmentHashes: segmentHashes
+                )
+            }
+        }
+    }
+
     public func sourceEndpoint(id: SourceEndpointID) throws -> SourceEndpoint? {
         try database.pool.read { db in
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM source_endpoints WHERE id=?", arguments: [id.description]) else { return nil }
@@ -1757,6 +2014,14 @@ public actor CrosscurrentRepository {
     private static func identifier<Kind>(_ type: Identifier<Kind>.Type, _ string: String?) -> Identifier<Kind>? {
         guard let string, let uuid = UUID(uuidString: string) else { return nil }
         return Identifier<Kind>(uuid)
+    }
+
+    private static func normalizedAssertionName(_ value: String) -> String {
+        value.precomposedStringWithCanonicalMapping
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
     }
 
     private static let dayFormatter: DateFormatter = {

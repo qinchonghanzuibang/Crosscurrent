@@ -192,6 +192,31 @@ public struct StoredItemState: Codable, Hashable, Sendable {
     }
 }
 
+/// Hash-bound normalized evidence exported by the local qualification command.
+/// It deliberately excludes full article bodies so tracked manifests can refer
+/// to exact revisions without copying copyrighted content.
+public struct QualificationEvidenceRecord: Codable, Hashable, Sendable {
+    public var sourceName: String
+    public var connector: ConnectorKind
+    public var canonicalURL: URL?
+    public var itemID: ItemID
+    public var itemRevisionID: ItemRevisionID
+    public var revisionOrdinal: Int
+    public var contentHash: String
+    public var segmentHashes: [String]
+
+    public init(sourceName: String, connector: ConnectorKind, canonicalURL: URL?, itemID: ItemID, itemRevisionID: ItemRevisionID, revisionOrdinal: Int, contentHash: String, segmentHashes: [String]) {
+        self.sourceName = sourceName
+        self.connector = connector
+        self.canonicalURL = canonicalURL
+        self.itemID = itemID
+        self.itemRevisionID = itemRevisionID
+        self.revisionOrdinal = revisionOrdinal
+        self.contentHash = contentHash
+        self.segmentHashes = segmentHashes
+    }
+}
+
 public struct ActivePrompt: Codable, Hashable, Sendable {
     public var template: PromptTemplate
     public var revision: PromptRevision
@@ -236,8 +261,11 @@ public struct PendingEvidenceSegment: Codable, Hashable, Sendable {
     public var sourceName: String
     public var canonicalURL: URL?
     public var accountID: ConnectorAccountID?
+    public var entityIDs: Set<EntityID>
+    public var topicIDs: Set<TopicID>
+    public var independenceGroup: String
 
-    public init(itemID: ItemID, itemRevision: ItemRevision, segment: ItemSegment, sourceID: SourceID, sourceName: String, canonicalURL: URL?, accountID: ConnectorAccountID?) {
+    public init(itemID: ItemID, itemRevision: ItemRevision, segment: ItemSegment, sourceID: SourceID, sourceName: String, canonicalURL: URL?, accountID: ConnectorAccountID?, entityIDs: Set<EntityID> = [], topicIDs: Set<TopicID> = [], independenceGroup: String? = nil) {
         self.itemID = itemID
         self.itemRevision = itemRevision
         self.segment = segment
@@ -245,6 +273,53 @@ public struct PendingEvidenceSegment: Codable, Hashable, Sendable {
         self.sourceName = sourceName
         self.canonicalURL = canonicalURL
         self.accountID = accountID
+        self.entityIDs = entityIDs
+        self.topicIDs = topicIDs
+        self.independenceGroup = independenceGroup ?? sourceID.description
+    }
+}
+
+public struct StoredEntityAlias: Codable, Hashable, Sendable {
+    public var entityID: EntityID
+    public var kind: EntityKind
+    public var value: String
+    public var normalizedValue: String
+    public var confidence: Confidence
+
+    public init(entityID: EntityID, kind: EntityKind, value: String, normalizedValue: String, confidence: Confidence) {
+        self.entityID = entityID
+        self.kind = kind
+        self.value = value
+        self.normalizedValue = normalizedValue
+        self.confidence = confidence
+    }
+}
+
+public struct CurrentItemDeduplicationEvidence: Codable, Hashable, Sendable {
+    public var itemID: ItemID
+    public var revisionID: ItemRevisionID
+    public var sourceID: SourceID
+    public var externalID: String
+    public var canonicalURL: URL?
+    public var title: String
+    public var author: String?
+    public var text: String
+    public var contentHash: String
+    public var languageCode: String?
+    public var publishedAt: Date?
+
+    public init(itemID: ItemID, revisionID: ItemRevisionID, sourceID: SourceID, externalID: String, canonicalURL: URL?, title: String, author: String?, text: String, contentHash: String, languageCode: String?, publishedAt: Date?) {
+        self.itemID = itemID
+        self.revisionID = revisionID
+        self.sourceID = sourceID
+        self.externalID = externalID
+        self.canonicalURL = canonicalURL
+        self.title = title
+        self.author = author
+        self.text = text
+        self.contentHash = contentHash
+        self.languageCode = languageCode
+        self.publishedAt = publishedAt
     }
 }
 
@@ -257,6 +332,16 @@ public struct StoredEventAggregate: Codable, Hashable, Sendable {
         self.event = event
         self.revision = revision
         self.memberships = memberships
+    }
+}
+
+public struct StoredClusteringSignals: Codable, Hashable, Sendable {
+    public var entityIDs: Set<EntityID>
+    public var topicIDs: Set<TopicID>
+
+    public init(entityIDs: Set<EntityID> = [], topicIDs: Set<TopicID> = []) {
+        self.entityIDs = entityIDs
+        self.topicIDs = topicIDs
     }
 }
 

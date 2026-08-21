@@ -20,18 +20,27 @@ public struct EvidenceMaintenanceResult: Codable, Hashable, Sendable {
 /// scorer, but their absence never prevents conservative deterministic clustering.
 public actor EvidenceEventMaintainer {
     private let repository: CrosscurrentRepository
+    private let deduplication: EvidenceDeduplicationService
 
-    public init(repository: CrosscurrentRepository) { self.repository = repository }
+    public init(repository: CrosscurrentRepository) {
+        self.repository = repository
+        deduplication = EvidenceDeduplicationService(repository: repository)
+    }
 
     public func run(limit: Int = 250) async throws -> EvidenceMaintenanceResult {
+        _ = try await deduplication.run(limit: max(500, limit * 4))
         let pending = try await repository.pendingEvidenceSegments(limit: limit)
         guard !pending.isEmpty else { return EvidenceMaintenanceResult() }
         let constraints = try await repository.activeConstraints()
         var aggregates = try await repository.currentEventAggregates(limit: 2_000)
+        var signalCache: [EventID: StoredClusteringSignals] = [:]
+        for aggregate in aggregates {
+            signalCache[aggregate.event.id] = try await repository.clusteringSignals(eventRevisionID: aggregate.revision.id)
+        }
         var result = EvidenceMaintenanceResult(evidenceSegments: pending.count)
 
         for evidence in pending {
-            let scores = aggregates.map { candidateScore(evidence: evidence, event: $0) }
+            let scores = aggregates.map { candidateScore(evidence: evidence, event: $0, signals: signalCache[$0.event.id] ?? StoredClusteringSignals()) }
             let assignment = DeterministicClusteringEngine.assign(
                 segmentLineageID: evidence.segment.lineageID,
                 candidates: scores,
@@ -41,6 +50,7 @@ public actor EvidenceEventMaintainer {
             if assignment.eventIDs.isEmpty {
                 let created = try await createEvent(from: evidence)
                 aggregates.append(created)
+                signalCache[created.event.id] = StoredClusteringSignals(entityIDs: evidence.entityIDs, topicIDs: evidence.topicIDs)
                 result.eventsCreated += 1
                 result.eventRevisionsCreated += 1
                 continue
@@ -51,6 +61,7 @@ public actor EvidenceEventMaintainer {
                 guard let index = aggregates.firstIndex(where: { $0.event.id == eventID }) else { continue }
                 let updated = try await append(evidence, to: aggregates[index], forced: assignment.wasForcedByUser)
                 aggregates[index] = updated
+                signalCache[eventID] = try await repository.clusteringSignals(eventRevisionID: updated.revision.id)
                 result.eventRevisionsCreated += 1
                 committed = true
             }
@@ -70,7 +81,7 @@ public actor EvidenceEventMaintainer {
             role: .primary,
             confidence: Confidence(0.86),
             identityWeight: 1,
-            independenceGroup: evidence.sourceID.description,
+            independenceGroup: evidence.independenceGroup,
             provenance: .deterministic
         )
         let revision = EventRevision(
@@ -93,7 +104,7 @@ public actor EvidenceEventMaintainer {
     }
 
     private func append(_ evidence: PendingEvidenceSegment, to aggregate: StoredEventAggregate, forced: Bool) async throws -> StoredEventAggregate {
-        let sourceAlreadyPresent = aggregate.memberships.contains { $0.independenceGroup == evidence.sourceID.description }
+        let sourceAlreadyPresent = aggregate.memberships.contains { $0.independenceGroup == evidence.independenceGroup }
         let membership = EventMembershipAssertion(
             eventID: aggregate.event.id,
             itemRevisionID: evidence.itemRevision.id,
@@ -103,7 +114,7 @@ public actor EvidenceEventMaintainer {
             role: sourceAlreadyPresent ? .repeated : .independent,
             confidence: forced ? .certain : Confidence(0.78),
             identityWeight: forced ? 1.5 : 1,
-            independenceGroup: evidence.sourceID.description,
+            independenceGroup: evidence.independenceGroup,
             provenance: forced ? .user : .deterministic
         )
         let memberships = aggregate.memberships + [membership]
@@ -133,20 +144,22 @@ public actor EvidenceEventMaintainer {
         return StoredEventAggregate(event: event, revision: revision, memberships: memberships)
     }
 
-    private func candidateScore(evidence: PendingEvidenceSegment, event: StoredEventAggregate) -> EventCandidateScore {
+    private func candidateScore(evidence: PendingEvidenceSegment, event: StoredEventAggregate, signals: StoredClusteringSignals) -> EventCandidateScore {
         let segmentSimilarity = similarity(evidence.segment.text, event.revision.summary + " " + event.revision.title)
         let titleSimilarity = similarity(evidence.itemRevision.title, event.revision.title)
         let referenceDate = evidence.itemRevision.publishedAt ?? evidence.itemRevision.fetchedAt
         let eventDate = event.revision.endedAt ?? event.revision.startedAt ?? event.revision.createdAt
         let days = abs(referenceDate.timeIntervalSince(eventDate)) / 86_400
         let temporal = max(0, 1 - days / 14)
-        let sameSource = event.memberships.contains { $0.independenceGroup == evidence.sourceID.description }
+        let sameSource = event.memberships.contains { $0.independenceGroup == evidence.independenceGroup }
         let semanticProxy = max(segmentSimilarity, titleSimilarity)
+        let entityOverlap = overlap(evidence.entityIDs, signals.entityIDs)
+        let topicOverlap = overlap(evidence.topicIDs, signals.topicIDs)
         return EventCandidateScore(
             eventID: event.event.id,
             semantic: semanticProxy,
-            entityOverlap: 0,
-            topicOverlap: 0,
+            entityOverlap: entityOverlap,
+            topicOverlap: topicOverlap,
             temporal: temporal,
             title: titleSimilarity,
             citation: 0,
@@ -154,6 +167,11 @@ public actor EvidenceEventMaintainer {
             coherence: segmentSimilarity,
             memberLineages: Set(event.memberships.map(\.segmentLineageID))
         )
+    }
+
+    private func overlap<T>(_ lhs: Set<T>, _ rhs: Set<T>) -> Double where T: Hashable {
+        guard !lhs.isEmpty, !rhs.isEmpty else { return 0 }
+        return Double(lhs.intersection(rhs).count) / Double(min(lhs.count, rhs.count))
     }
 
     private func providerFreeSummary(_ evidence: PendingEvidenceSegment) -> String {

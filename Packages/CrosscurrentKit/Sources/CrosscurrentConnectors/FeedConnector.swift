@@ -32,7 +32,7 @@ public actor FeedConnector: Connector {
         guard let url = endpoint.canonicalURL else { throw ConnectorError.unsupportedInput }
         let response = try await http.get(url, headers: ["Accept": "application/atom+xml, application/rss+xml, application/feed+json, text/xml;q=0.9"])
         let feed = try Feed(data: response.data)
-        let candidates = Self.items(from: feed)
+        let candidates = Array(Self.items(from: feed).prefix(30))
         let seen: Set<String> = (try? cursor?.decode([String].self)).map(Set.init) ?? []
         let fresh = candidates.filter { !seen.contains($0.externalID) }
         let next = try ConnectorCursor(family: "feed-seen-v1", value: Array(candidates.prefix(500).map(\.externalID)))

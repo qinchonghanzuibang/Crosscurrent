@@ -1,5 +1,6 @@
 import CrosscurrentDesignSystem
 import CrosscurrentDomain
+import CrosscurrentIngestion
 import CrosscurrentModels
 import CrosscurrentStorage
 import SwiftUI
@@ -10,6 +11,7 @@ struct SourcesView: View {
     @State private var adding = false
     @State private var url = ""
     @State private var status = ""
+    @State private var selectedAction: SourceDiscoveryAction = .subscribe
     @State private var importingOPML = false
     var body: some View {
         VStack(spacing: 0) {
@@ -62,8 +64,47 @@ struct SourcesView: View {
                 Text("Add Source").font(.title.bold())
                 TextField("Feed, creator, repository, or webpage URL", text: $url).textFieldStyle(.roundedBorder)
                 Text("WeChat Official Accounts and Xiaohongshu creators use the authenticated BrowserWorker; URL capture remains supplementary.").font(.caption).foregroundStyle(.secondary)
+                if let preview = model.sourcePreview {
+                    Divider()
+                    HStack(alignment: .top, spacing: 12) {
+                        SourceMonogram(preview.result.sourceRevision.displayName, size: 38)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(preview.result.sourceRevision.displayName).font(.headline)
+                            Text(preview.result.sourceRevision.summary ?? preview.inputURL.absoluteString)
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                            Text("\(preview.connectorKind.rawValue) · \(preview.result.recentCandidates.count) recent samples")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                    if preview.availableActions.count > 1 {
+                        Picker("Action", selection: $selectedAction) {
+                            ForEach(preview.availableActions, id: \.self) { action in
+                                Text(action.displayName).tag(action)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
                 if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary) }
-                HStack { Spacer(); Button("Cancel") { adding = false }; Button("Add and Refresh") { Task { status = await model.addSource(url); if status == String(localized: "Source added and refreshed.") { adding = false; url = "" } } }.keyboardShortcut(.defaultAction).disabled(url.isEmpty) }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { model.clearSourcePreview(); adding = false }
+                    if model.sourcePreview == nil {
+                        Button("Preview") { Task { status = await model.previewSource(url); selectedAction = model.sourcePreview?.availableActions.first ?? .subscribe } }
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(url.isEmpty || model.sourceDiscoveryInProgress)
+                    } else {
+                        Button("Back") { model.clearSourcePreview(); status = "" }
+                        Button(selectedAction.commitLabel) {
+                            Task {
+                                status = await model.subscribeSourcePreview(action: selectedAction)
+                                if model.sourcePreview == nil { adding = false; url = "" }
+                            }
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(model.sourceDiscoveryInProgress)
+                    }
+                }
             }.padding(24).frame(width: 560)
         }
         .fileImporter(isPresented: $importingOPML, allowedContentTypes: [.xml, .data], allowsMultipleSelection: false) { result in
@@ -72,6 +113,24 @@ struct SourcesView: View {
                 return
             }
             Task { status = await model.importOPML(from: selected) }
+        }
+    }
+}
+
+private extension SourceDiscoveryAction {
+    var displayName: String {
+        switch self {
+        case .subscribe: String(localized: "Subscribe")
+        case .importOnce: String(localized: "Import Once")
+        case .monitor: String(localized: "Monitor")
+        }
+    }
+
+    var commitLabel: String {
+        switch self {
+        case .subscribe: String(localized: "Subscribe and Refresh")
+        case .importOnce: String(localized: "Import Page")
+        case .monitor: String(localized: "Monitor and Refresh")
         }
     }
 }

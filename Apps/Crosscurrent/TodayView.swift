@@ -24,22 +24,21 @@ struct TodayView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 42)
                 } else {
-                    SectionRule("Today", trailing: Self.leadEventCount(min(5, model.events.count)))
-                    ForEach(Array(model.events.prefix(5).enumerated()), id: \.element.id) { index, event in
+                    let lead = section(.today)
+                    SectionRule("5 things worth knowing", trailing: Self.leadEventCount(lead.count))
+                    ForEach(Array(lead.enumerated()), id: \.element.id) { index, event in
                         TodayEventCard(event: event, index: index + 1) { model.open(event) }
                             .accessibilityIdentifier("today-event-\(event.id.description)")
-                        if index < min(4, model.events.count - 1) { Divider() }
+                        if index < lead.count - 1 { Divider() }
                     }
-                    SectionRule("Emerging")
-                    compactRows(Array(model.events.dropFirst(2).prefix(3)))
-                    SectionRule("From People You Follow")
-                    compactRows(model.events.filter { !$0.followedPeople.isEmpty })
-                    if model.events.contains(where: { $0.reasons.contains(.chinaGlobalCoverage) }) {
+                    optionalSection("Emerging", events: section(.emerging))
+                    optionalSection("From People You Follow", events: section(.peopleYouFollow))
+                    optionalSection("Worth Reading", events: section(.worthReading))
+                    if !section(.chinaGlobal).isEmpty {
                         SectionRule("China ↔ Global", trailing: "Evidence-qualified comparison")
-                        compactRows(model.events.filter { $0.reasons.contains(.chinaGlobalCoverage) })
+                        compactRows(section(.chinaGlobal))
                     }
-                    SectionRule("Everything Else")
-                    compactRows(Array(model.events.suffix(2)))
+                    optionalSection("Everything Else", events: section(.everythingElse))
                 }
             }
             .padding(.horizontal, 34)
@@ -85,6 +84,22 @@ struct TodayView: View {
                 Divider()
             }
         }
+    }
+
+    @ViewBuilder
+    private func optionalSection(_ title: String, events: [EventCardModel]) -> some View {
+        if !events.isEmpty {
+            SectionRule(title)
+            compactRows(events)
+        }
+    }
+
+    private func section(_ section: DigestSection) -> [EventCardModel] {
+        if let values = model.digestSections[section] { return values }
+        #if DEBUG
+        if section == .today { return Array(model.events.prefix(5)) }
+        #endif
+        return []
     }
 
     private static func leadEventCount(_ count: Int) -> String {

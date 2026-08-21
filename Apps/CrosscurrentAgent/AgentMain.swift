@@ -41,7 +41,7 @@ final class AgentRuntime: NSObject, @unchecked Sendable {
                     let blobStore = CanonicalBlobStore(locations: locations, repository: repository)
                     let http = ArchivingConnectorHTTPClient(repository: repository, blobStore: blobStore)
                     let registry = await ConnectorCatalog.production(browser: browser, http: http)
-                    let refreshExecutor = RefreshJobExecutor(repository: repository, connectors: registry, blobStore: blobStore)
+                    let refreshExecutor = RefreshJobExecutor(repository: repository, connectors: registry, blobStore: blobStore, http: http)
                     let shareImporter = ShareInboxImporter(locations: locations, repository: repository, leaseOwner: "agent-share-import")
                     let maintainer = EvidenceEventMaintainer(repository: repository)
                     let today = TodayCoordinator(repository: repository)

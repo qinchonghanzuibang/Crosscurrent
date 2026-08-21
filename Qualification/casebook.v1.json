@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "evidenceRevisionBindings": [],
+  "duplicateJudgments": [],
+  "eventMembershipJudgments": [],
+  "searchJudgments": [],
+  "rankingProfiles": [
+    {
+      "id": "developer-systems",
+      "followedSourceIDs": ["swift-blog", "webkit", "mozilla-hacks", "swift-repository", "swift-transformers"],
+      "followedTopics": ["Swift", "WebKit", "browser engineering", "local AI tooling"],
+      "eventJudgments": []
+    },
+    {
+      "id": "cross-ecosystem-ai",
+      "followedSourceIDs": ["hugging-face", "deepseek-news", "arxiv-cl", "ruanyifeng", "solidot"],
+      "followedTopics": ["model releases", "multilingual research", "local inference"],
+      "eventJudgments": []
+    }
+  ]
+}

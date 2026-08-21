@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "CrosscurrentDesignSystem", targets: ["CrosscurrentDesignSystem"]),
         .library(name: "CrosscurrentIPC", targets: ["CrosscurrentIPC"]),
         .library(name: "CrosscurrentDiagnostics", targets: ["CrosscurrentDiagnostics"]),
+        .executable(name: "crosscurrent-qualification", targets: ["CrosscurrentQualification"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.10.0"),
@@ -56,6 +57,11 @@ let package = Package(
         .target(name: "CrosscurrentReader", dependencies: ["CrosscurrentDomain", "CrosscurrentBrowser"]),
         .target(name: "CrosscurrentModels", dependencies: ["CrosscurrentDomain", "CrosscurrentRanking"]),
         .target(name: "CrosscurrentDesignSystem", dependencies: ["CrosscurrentDomain"]),
+        .executableTarget(name: "CrosscurrentQualification", dependencies: [
+            "CrosscurrentDomain", "CrosscurrentStorage", "CrosscurrentConnectors",
+            "CrosscurrentIngestion", "CrosscurrentIntelligence", "CrosscurrentRanking",
+            "CrosscurrentSearch",
+        ]),
         .testTarget(name: "CrosscurrentDomainTests", dependencies: ["CrosscurrentDomain", "CrosscurrentConnectors", "CrosscurrentIngestion", "CrosscurrentIntelligence", "CrosscurrentModels", "CrosscurrentRanking", "CrosscurrentSearch", "CrosscurrentStorage"]),
         .testTarget(name: "CrosscurrentStorageTests", dependencies: ["CrosscurrentStorage", .product(name: "GRDB", package: "GRDB.swift")]),
         .testTarget(name: "CrosscurrentConnectorTests", dependencies: ["CrosscurrentConnectors", "CrosscurrentDomain"]),
