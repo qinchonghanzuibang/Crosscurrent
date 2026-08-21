@@ -19,6 +19,12 @@ public enum AuthenticatedCreatorPlatform: String, Codable, CaseIterable, Sendabl
     }
 }
 
+public enum AuthenticatedConnectorQualificationState: String, Codable, Sendable {
+    case captureRequired
+    case liveContractInstalled
+    case platformChanged
+}
+
 public struct BrowserCreatorDiscoveryRequest: Codable, Hashable, Sendable {
     public var platform: AuthenticatedCreatorPlatform
     public var inputURL: URL
@@ -63,7 +69,8 @@ public protocol BrowserCreatorSessionClient: Sendable {
 
 public actor AuthenticatedCreatorConnector: Connector {
     public nonisolated let kind: ConnectorKind
-    public nonisolated let capabilities: ConnectorCapabilities = [.discovery, .authentication, .deltaSync, .pagination, .fullContent, .browserRequired, .deletionSignals, .engagementMetrics, .backgroundRefresh]
+    public nonisolated let capabilities: ConnectorCapabilities = [.discovery, .authentication, .browserRequired]
+    public nonisolated let qualificationState: AuthenticatedConnectorQualificationState = .captureRequired
 
     private let platform: AuthenticatedCreatorPlatform
     private let browser: any BrowserCreatorSessionClient

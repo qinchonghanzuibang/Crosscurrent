@@ -191,6 +191,116 @@ public actor CrosscurrentRepository {
         }
     }
 
+    /// Resolves a high-confidence structured identity without requiring an AI provider. The
+    /// alias lookup and creation happen in one canonical write transaction so concurrent
+    /// refresh paths cannot create a second identity inside this writer.
+    public func resolveOrCreateEntity(
+        displayName: String,
+        kind: EntityKind,
+        languageCode: String?,
+        sourceID: SourceID? = nil,
+        sourceRole: SourceEntityRole? = nil,
+        provenance: AssertionProvenance = .connector,
+        confidence: Confidence = Confidence(0.9),
+        at date: Date = .now
+    ) throws -> EntityID? {
+        let display = displayName.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = Self.normalizedAssertionName(display)
+        guard normalized.count >= 2 else { return nil }
+        var resolved: EntityID?
+        _ = try mutate(domains: [.entities, .sources, .searchInputs]) { db in
+            if let stored: String = try String.fetchOne(
+                db,
+                sql: "SELECT entity_id FROM entity_aliases WHERE normalized_value=? ORDER BY confidence DESC LIMIT 1",
+                arguments: [normalized]
+            ) {
+                resolved = Self.identifier(EntityID.self, stored)
+            } else {
+                let entityID = EntityID()
+                let revisionID = EntityRevisionID()
+                try db.execute(
+                    sql: "INSERT INTO entities (id, current_revision_id, kind, normalized_name, is_followed, created_at) VALUES (?, ?, ?, ?, 0, ?)",
+                    arguments: [entityID.description, revisionID.description, kind.rawValue, normalized, date.timeIntervalSince1970]
+                )
+                try db.execute(
+                    sql: "INSERT INTO entity_revisions (id, entity_id, display_name, summary, external_identifiers_json, created_at) VALUES (?, ?, ?, NULL, NULL, ?)",
+                    arguments: [revisionID.description, entityID.description, display, date.timeIntervalSince1970]
+                )
+                try db.execute(
+                    sql: "INSERT INTO entity_aliases (id, entity_id, value, normalized_value, language_code, script_code, provenance, confidence, valid_from, valid_until) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)",
+                    arguments: [EntityAliasID().description, entityID.description, display, normalized, languageCode, provenance.rawValue, confidence.value, date.timeIntervalSince1970]
+                )
+                try Self.upsertSearchInput(
+                    stableID: entityID.description,
+                    kind: kind.rawValue,
+                    revisionID: revisionID.description,
+                    languageCode: languageCode,
+                    title: display,
+                    body: "",
+                    inputHash: HTTPMetadataRedactor.digest(Data(normalized.utf8)),
+                    db: db
+                )
+                resolved = entityID
+            }
+            if let resolved, let sourceID, let sourceRole {
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO source_entities (id, source_id, entity_id, role, provenance, confidence) VALUES (?, ?, ?, ?, ?, ?)",
+                    arguments: [UUID().uuidString.lowercased(), sourceID.description, resolved.description, sourceRole.rawValue, provenance.rawValue, confidence.value]
+                )
+            }
+        }
+        return resolved
+    }
+
+    public func entityAliasesForEnrichment(sourceID: SourceID, limit: Int = 2_000) throws -> [StoredEntityAlias] {
+        try database.pool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT ea.entity_id, e.kind, ea.value, ea.normalized_value, ea.confidence,
+                       CASE WHEN se.source_id IS NULL THEN 1 ELSE 0 END AS unlinked
+                FROM entity_aliases ea
+                JOIN entities e ON e.id=ea.entity_id
+                LEFT JOIN source_entities se ON se.entity_id=ea.entity_id AND se.source_id=?
+                WHERE ea.valid_until IS NULL
+                ORDER BY unlinked ASC, ea.confidence DESC, LENGTH(ea.normalized_value) DESC
+                LIMIT ?
+                """,
+                arguments: [sourceID.description, max(1, min(limit, 10_000))]
+            )
+            return try rows.map { row in
+                guard let entityID = Self.identifier(EntityID.self, row["entity_id"]),
+                      let kind = EntityKind(rawValue: row["kind"])
+                else { throw CrosscurrentStorageError.corruptRecord("StoredEntityAlias") }
+                return StoredEntityAlias(
+                    entityID: entityID,
+                    kind: kind,
+                    value: row["value"],
+                    normalizedValue: row["normalized_value"],
+                    confidence: Confidence(row["confidence"])
+                )
+            }
+        }
+    }
+
+    @discardableResult
+    public func saveItemEntityMentions(_ mentions: [ItemEntityMention], idempotencyKey: String? = nil) throws -> Bool {
+        guard !mentions.isEmpty else { return false }
+        return try mutate(domains: [.entities, .items], idempotencyKey: idempotencyKey) { db in
+            for mention in mentions {
+                try db.execute(
+                    sql: """
+                    INSERT OR IGNORE INTO item_entity_mentions
+                      (id, item_revision_id, item_segment_id, entity_id, utf8_start, utf8_length,
+                       excerpt_hash, mentioned_text, provenance, confidence)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    arguments: [mention.id.uuidString.lowercased(), mention.itemRevisionID.description, mention.itemSegmentID.description, mention.entityID.description, mention.span.utf8Start, mention.span.utf8Length, mention.span.excerptHash, mention.mentionedText, mention.provenance.rawValue, mention.confidence.value]
+                )
+            }
+        }
+    }
+
     @discardableResult
     public func saveTopic(_ topic: Topic, revision: TopicRevision, aliases: [TopicAlias] = [], idempotencyKey: String? = nil) throws -> Bool {
         try mutate(domains: [.topics, .searchInputs], idempotencyKey: idempotencyKey) { db in
@@ -333,9 +443,9 @@ public actor CrosscurrentRepository {
                 INSERT OR IGNORE INTO event_revisions
                   (id, event_id, ordinal, title, summary, started_at, ended_at, change_kind,
                    primary_membership_assertion_id, score_snapshot_json, generation_metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 """,
-                arguments: [revision.id.description, event.id.description, revision.ordinal, revision.title, revision.summary, revision.startedAt?.timeIntervalSince1970, revision.endedAt?.timeIntervalSince1970, revision.changeKind.rawValue, revision.primaryMembershipAssertionID?.description, revision.createdAt.timeIntervalSince1970]
+                arguments: [revision.id.description, event.id.description, revision.ordinal, revision.title, revision.summary, revision.startedAt?.timeIntervalSince1970, revision.endedAt?.timeIntervalSince1970, revision.changeKind.rawValue, revision.primaryMembershipAssertionID?.description, try encoder.encode(revision.primaryReasonTrace), revision.createdAt.timeIntervalSince1970]
             )
             let included = includedMembershipIDs ?? Set(memberships.map(\.id))
             for membershipID in included {
@@ -498,6 +608,40 @@ public actor CrosscurrentRepository {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [receipt.id.uuidString.lowercased(), receipt.endpointID?.description, safeRequest.safeURL.absoluteString, requestMetadata, responseMetadata, receipt.statusCode, receipt.responseSHA256, receipt.blobID?.description, receipt.fetchedAt.timeIntervalSince1970, receipt.retentionClass.rawValue, receipt.extractionOutcome]
+            )
+        }
+    }
+
+    public func latestRawFetchCache(for url: URL) throws -> StoredRawFetchCache? {
+        let safeURL = HTTPMetadataRedactor.redact(url: url, headers: [:]).safeURL.absoluteString
+        return try database.pool.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT r.safe_url, r.redacted_response_metadata, b.*
+                FROM raw_fetches r JOIN blobs b ON b.id=r.blob_id
+                WHERE r.safe_url=? AND r.status_code BETWEEN 200 AND 299
+                ORDER BY r.fetched_at DESC LIMIT 1
+                """,
+                arguments: [safeURL]
+            ), let blobID = Self.identifier(BlobID.self, row["id"]),
+               let retention = BlobRetentionClass(rawValue: row["retention_class"]),
+               let finalURL = URL(string: row["safe_url"])
+            else { return nil }
+            let metadata: Data? = row["redacted_response_metadata"]
+            let headers = try metadata.map { try decoder.decode([String: String].self, from: $0) } ?? [:]
+            return StoredRawFetchCache(
+                responseHeaders: headers,
+                blob: StoredBlob(
+                    id: blobID,
+                    sha256: row["sha256"],
+                    relativePath: row["relative_path"],
+                    byteCount: row["byte_count"],
+                    mediaType: row["media_type"],
+                    retentionClass: retention,
+                    createdAt: Date(timeIntervalSince1970: row["created_at"])
+                ),
+                finalURL: finalURL
             )
         }
     }
@@ -880,12 +1024,124 @@ public actor CrosscurrentRepository {
         }
     }
 
+    public func currentItemDeduplicationEvidence(limit: Int = 1_000) throws -> [CurrentItemDeduplicationEvidence] {
+        try database.pool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT i.id AS item_id, i.source_id, i.connector_external_id, i.canonical_key,
+                       ir.id AS revision_id, ir.title, ir.author, ir.plain_text, ir.content_hash,
+                       ir.language_code, ir.published_at
+                FROM items i JOIN item_revisions ir ON ir.id=i.current_revision_id
+                WHERE i.remote_state != 'deleted' AND i.user_deletion_state='active'
+                ORDER BY COALESCE(ir.published_at, ir.fetched_at) DESC
+                LIMIT ?
+                """,
+                arguments: [max(1, min(limit, 10_000))]
+            )
+            return try rows.map { row in
+                guard let itemID = Self.identifier(ItemID.self, row["item_id"]),
+                      let revisionID = Self.identifier(ItemRevisionID.self, row["revision_id"]),
+                      let sourceID = Self.identifier(SourceID.self, row["source_id"])
+                else { throw CrosscurrentStorageError.corruptRecord("CurrentItemDeduplicationEvidence") }
+                let canonical: String = row["canonical_key"]
+                return CurrentItemDeduplicationEvidence(
+                    itemID: itemID,
+                    revisionID: revisionID,
+                    sourceID: sourceID,
+                    externalID: row["connector_external_id"],
+                    canonicalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
+                    title: row["title"],
+                    author: row["author"],
+                    text: row["plain_text"],
+                    contentHash: row["content_hash"],
+                    languageCode: row["language_code"],
+                    publishedAt: (row["published_at"] as Double?).map(Date.init(timeIntervalSince1970:))
+                )
+            }
+        }
+    }
+
+    @discardableResult
+    public func saveItemRelation(
+        from fromItemID: ItemID,
+        to toItemID: ItemID,
+        relationship: String,
+        confidence: Confidence,
+        groupsAsDuplicate: Bool,
+        at date: Date = .now
+    ) throws -> Bool {
+        guard fromItemID != toItemID else { return false }
+        let ordered = [fromItemID.description, toItemID.description].sorted()
+        let relationID = "relation:\(ordered[0]):\(ordered[1]):\(relationship)"
+        let alreadyPersisted = try database.pool.read { db in
+            let relationExists = try Bool.fetchOne(
+                db,
+                sql: "SELECT EXISTS(SELECT 1 FROM item_relations WHERE id=?)",
+                arguments: [relationID]
+            ) ?? false
+            guard relationExists, groupsAsDuplicate else { return relationExists }
+            return try Bool.fetchOne(
+                db,
+                sql: """
+                SELECT EXISTS(
+                  SELECT 1 FROM duplicate_group_members lhs
+                  JOIN duplicate_group_members rhs ON rhs.group_id=lhs.group_id
+                  WHERE lhs.item_id=? AND rhs.item_id=?
+                    AND lhs.classification=? AND rhs.classification=?
+                )
+                """,
+                arguments: [ordered[0], ordered[1], relationship, relationship]
+            ) ?? false
+        }
+        if alreadyPersisted { return false }
+        return try mutate(domains: [.items, .events]) { db in
+            try db.execute(
+                sql: "INSERT OR IGNORE INTO item_relations (id, from_item_id, to_item_id, relationship, confidence) VALUES (?, ?, ?, ?, ?)",
+                arguments: [relationID, ordered[0], ordered[1], relationship, confidence.value]
+            )
+            guard groupsAsDuplicate else { return }
+            let existingGroups = try String.fetchAll(
+                db,
+                sql: "SELECT DISTINCT group_id FROM duplicate_group_members WHERE item_id IN (?, ?) ORDER BY group_id",
+                arguments: [ordered[0], ordered[1]]
+            )
+            let groupID = existingGroups.first ?? "duplicate:\(ordered[0]):\(ordered[1])"
+            if existingGroups.isEmpty {
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO duplicate_groups (id, canonical_item_id, created_at) VALUES (?, ?, ?)",
+                    arguments: [groupID, ordered[0], date.timeIntervalSince1970]
+                )
+            }
+            for mergedGroupID in existingGroups.dropFirst() {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO duplicate_group_members (group_id, item_id, classification) SELECT ?, item_id, classification FROM duplicate_group_members WHERE group_id=?",
+                    arguments: [groupID, mergedGroupID]
+                )
+                try db.execute(sql: "DELETE FROM duplicate_group_members WHERE group_id=?", arguments: [mergedGroupID])
+                try db.execute(sql: "DELETE FROM duplicate_groups WHERE id=?", arguments: [mergedGroupID])
+            }
+            for itemID in ordered {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO duplicate_group_members (group_id, item_id, classification) VALUES (?, ?, ?)",
+                    arguments: [groupID, itemID, relationship]
+                )
+            }
+        }
+    }
+
     public func pendingEvidenceSegments(limit: Int = 250) throws -> [PendingEvidenceSegment] {
         try database.pool.read { db in
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                SELECT i.id AS item_id, i.source_id, i.canonical_key, ep.account_id,
+                SELECT i.id AS item_id, i.source_id, i.canonical_key, ep.account_id, ep.connector_kind,
+                       EXISTS(
+                         SELECT 1 FROM source_entities se
+                         WHERE se.source_id=i.source_id
+                           AND se.role IN ('represents','publishedBy','officialFor')
+                           AND se.confidence >= 0.8
+                       ) AS source_is_official,
                        ir.id AS revision_id, ir.ordinal AS revision_ordinal, ir.title, ir.author,
                        ir.published_at, ir.modified_at, ir.fetched_at, ir.language_code,
                        ir.plain_text, ir.content_hash AS revision_hash, ir.revision_reason,
@@ -953,7 +1209,12 @@ public actor CrosscurrentRepository {
                     sourceID: sourceID,
                     sourceName: row["source_name"],
                     canonicalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
-                    accountID: Self.identifier(ConnectorAccountID.self, row["account_id"] as String?)
+                    accountID: Self.identifier(ConnectorAccountID.self, row["account_id"] as String?),
+                    connector: ConnectorKind(rawValue: row["connector_kind"]) ?? .website,
+                    isOfficialSource: row["source_is_official"],
+                    entityIDs: Set(try String.fetchAll(db, sql: "SELECT DISTINCT entity_id FROM item_entity_mentions WHERE item_revision_id=? AND item_segment_id=?", arguments: [revisionID.description, segmentID.description]).compactMap { Self.identifier(EntityID.self, $0) }),
+                    topicIDs: Set(try String.fetchAll(db, sql: "SELECT DISTINCT topic_id FROM item_topic_assertions WHERE item_revision_id=? AND (item_segment_id IS NULL OR item_segment_id=?)", arguments: [revisionID.description, segmentID.description]).compactMap { Self.identifier(TopicID.self, $0) }),
+                    independenceGroup: try String.fetchOne(db, sql: "SELECT group_id FROM duplicate_group_members WHERE item_id=? LIMIT 1", arguments: [itemID.description]) ?? sourceID.description
                 )
             }
         }
@@ -983,6 +1244,115 @@ public actor CrosscurrentRepository {
                     memberships: memberships
                 )
             }
+        }
+    }
+
+    public func clusteringSignals(eventRevisionID: EventRevisionID) throws -> StoredClusteringSignals {
+        try database.pool.read { db in
+            let entityValues = try String.fetchAll(
+                db,
+                sql: """
+                SELECT DISTINCT iem.entity_id
+                FROM event_revision_memberships erm
+                JOIN event_membership_assertions ema ON ema.id=erm.membership_assertion_id
+                JOIN item_entity_mentions iem ON iem.item_revision_id=ema.item_revision_id
+                  AND iem.item_segment_id=ema.item_segment_id
+                WHERE erm.event_revision_id=?
+                """,
+                arguments: [eventRevisionID.description]
+            )
+            let topicValues = try String.fetchAll(
+                db,
+                sql: "SELECT DISTINCT topic_id FROM event_topic_assertions WHERE event_revision_id=?",
+                arguments: [eventRevisionID.description]
+            )
+            return StoredClusteringSignals(
+                entityIDs: Set(entityValues.compactMap { Self.identifier(EntityID.self, $0) }),
+                topicIDs: Set(topicValues.compactMap { Self.identifier(TopicID.self, $0) })
+            )
+        }
+    }
+
+    public func primarySourceSignals(membershipID: MembershipAssertionID) throws -> StoredPrimarySourceSignals? {
+        try database.pool.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT ep.connector_kind, i.canonical_key, ir.published_at, LENGTH(ir.plain_text) AS text_length,
+                       ema.provenance,
+                       EXISTS(
+                         SELECT 1 FROM source_entities se
+                         WHERE se.source_id=i.source_id
+                           AND se.role IN ('represents','publishedBy','officialFor')
+                           AND se.confidence >= 0.8
+                       ) AS is_official
+                FROM event_membership_assertions ema
+                JOIN item_revisions ir ON ir.id=ema.item_revision_id
+                JOIN items i ON i.id=ir.item_id
+                JOIN source_endpoints ep ON ep.id=i.endpoint_id
+                WHERE ema.id=?
+                """,
+                arguments: [membershipID.description]
+            ), let connector = ConnectorKind(rawValue: row["connector_kind"]),
+               let provenance = AssertionProvenance(rawValue: row["provenance"])
+            else { return nil }
+            let canonical: String = row["canonical_key"]
+            return StoredPrimarySourceSignals(
+                connector: connector,
+                isOfficialRelationship: row["is_official"],
+                canonicalURL: URL(string: canonical),
+                publishedAt: (row["published_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                textLength: row["text_length"],
+                provenance: provenance
+            )
+        }
+    }
+
+    public func coverageComparison(eventID: EventID) throws -> StoredCoverageComparison {
+        try database.pool.read { db in
+            guard let currentRevision: String = try String.fetchOne(db, sql: "SELECT current_revision_id FROM events WHERE id=?", arguments: [eventID.description]) else {
+                return StoredCoverageComparison()
+            }
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT ema.id, ema.independence_group, ca.ecosystem, sr.display_name,
+                       ir.title, ir.published_at, seg.text,
+                       CASE WHEN er.primary_membership_assertion_id=ema.id THEN 1 ELSE 0 END AS is_primary
+                FROM event_revision_memberships erm
+                JOIN event_revisions er ON er.id=erm.event_revision_id
+                JOIN event_membership_assertions ema ON ema.id=erm.membership_assertion_id
+                JOIN item_revisions ir ON ir.id=ema.item_revision_id
+                JOIN item_segments seg ON seg.id=ema.item_segment_id
+                JOIN items i ON i.id=ir.item_id
+                JOIN sources s ON s.id=i.source_id
+                JOIN source_revisions sr ON sr.id=s.current_revision_id
+                JOIN source_coverage_assertions ca ON ca.source_id=i.source_id AND ca.is_current=1
+                WHERE erm.event_revision_id=? AND ca.ecosystem IN ('chinaFocused','globalFocused')
+                ORDER BY ca.ecosystem, COALESCE(ir.published_at, ir.fetched_at), sr.display_name
+                """,
+                arguments: [currentRevision]
+            )
+            let evidence = try rows.map { row -> StoredCoverageEvidence in
+                guard let id = Self.identifier(MembershipAssertionID.self, row["id"]),
+                      let ecosystem = CoverageEcosystem(rawValue: row["ecosystem"])
+                else { throw CrosscurrentStorageError.corruptRecord("CoverageComparison") }
+                let excerpt: String = row["text"]
+                return StoredCoverageEvidence(
+                    id: id,
+                    ecosystem: ecosystem,
+                    independenceGroup: (row["independence_group"] as String?) ?? row["display_name"],
+                    sourceName: row["display_name"],
+                    title: row["title"],
+                    excerpt: String(excerpt.prefix(360)),
+                    publishedAt: (row["published_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                    isPrimary: row["is_primary"]
+                )
+            }
+            return StoredCoverageComparison(
+                chinaFocused: evidence.filter { $0.ecosystem == .chinaFocused },
+                globalFocused: evidence.filter { $0.ecosystem == .globalFocused }
+            )
         }
     }
 
@@ -1049,6 +1419,16 @@ public actor CrosscurrentRepository {
                     """,
                     arguments: [revision.id.description]
                 )
+                let followedTopics = try String.fetchAll(
+                    db,
+                    sql: """
+                    SELECT DISTINCT tr.name FROM event_topic_assertions a
+                    JOIN topics t ON t.id=a.topic_id AND t.is_followed=1
+                    JOIN topic_revisions tr ON tr.id=t.current_revision_id
+                    WHERE a.event_revision_id=? ORDER BY tr.name
+                    """,
+                    arguments: [revision.id.description]
+                )
                 let people = try String.fetchAll(
                     db,
                     sql: """
@@ -1076,6 +1456,35 @@ public actor CrosscurrentRepository {
                     arguments: [revision.id.description]
                 )
                 let coverageCounts = Dictionary(uniqueKeysWithValues: coverageRows.map { ($0["ecosystem"] as String, $0["group_count"] as Int) })
+                let hasFollowedSource = try Bool.fetchOne(
+                    db,
+                    sql: """
+                    SELECT EXISTS(
+                      SELECT 1 FROM event_revision_memberships rm
+                      JOIN event_membership_assertions m ON m.id=rm.membership_assertion_id
+                      JOIN item_revisions ir ON ir.id=m.item_revision_id
+                      JOIN items i ON i.id=ir.item_id JOIN sources s ON s.id=i.source_id
+                      WHERE rm.event_revision_id=? AND s.is_followed=1
+                    )
+                    """,
+                    arguments: [revision.id.description]
+                ) ?? false
+                let isSaved = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM saved_entries WHERE target_kind='event' AND target_id=?)", arguments: [eventID.description]) ?? false
+                let velocityRow = try Row.fetchOne(
+                    db,
+                    sql: """
+                    SELECT COUNT(DISTINCT CASE WHEN COALESCE(ir.published_at, ir.fetched_at) >= ? THEN COALESCE(m.independence_group, i.source_id) END) AS recent_groups,
+                           COUNT(DISTINCT CASE WHEN COALESCE(ir.published_at, ir.fetched_at) < ? THEN COALESCE(m.independence_group, i.source_id) END) AS prior_groups
+                    FROM event_revision_memberships rm
+                    JOIN event_membership_assertions m ON m.id=rm.membership_assertion_id
+                    JOIN item_revisions ir ON ir.id=m.item_revision_id JOIN items i ON i.id=ir.item_id
+                    WHERE rm.event_revision_id=?
+                    """,
+                    arguments: [Date.now.addingTimeInterval(-86_400).timeIntervalSince1970, Date.now.addingTimeInterval(-86_400).timeIntervalSince1970, revision.id.description]
+                )
+                let recentGroups: Int = velocityRow?["recent_groups"] ?? 0
+                let priorGroups: Int = velocityRow?["prior_groups"] ?? 0
+                let trendVelocity = recentGroups >= 2 ? min(1, Double(recentGroups) / max(2, Double(priorGroups) / 7)) : 0
                 let readRow = try Row.fetchOne(db, sql: "SELECT * FROM event_read_states WHERE event_id=?", arguments: [eventID.description])
                 let readState = EventReadState(
                     lastSeenRevisionID: Self.identifier(EventRevisionID.self, readRow?["last_seen_event_revision_id"] as String?),
@@ -1110,7 +1519,12 @@ public actor CrosscurrentRepository {
                     sourceCount: counts?["source_count"] ?? 0,
                     independentSourceCount: counts?["independent_count"] ?? 0,
                     topics: topicNames,
+                    followedTopics: followedTopics,
                     followedPeople: people,
+                    hasFollowedSource: hasFollowedSource,
+                    isSaved: isSaved,
+                    primaryAuthority: revision.primaryReasonTrace.contains(where: { $0.contains("first-party") || $0.contains("official repository") || $0.contains("paper record") }) ? 1 : 0.65,
+                    trendVelocity: trendVelocity,
                     readerText: primary["plain_text"],
                     readerHTML: readerHTML,
                     originalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
@@ -1211,7 +1625,11 @@ public actor CrosscurrentRepository {
                     displayName: row["display_name"],
                     keychainReference: row["keychain_reference"],
                     enabled: row["enabled"],
-                    configuration: row["configuration_json"]
+                    configuration: row["configuration_json"],
+                    health: row["health"],
+                    lastCheckedAt: (row["last_checked_at"] as Double?).map { Date(timeIntervalSince1970: $0) },
+                    lastError: row["last_error"],
+                    retryAt: (row["retry_at"] as Double?).map { Date(timeIntervalSince1970: $0) }
                 )
             }
         }
@@ -1309,6 +1727,31 @@ public actor CrosscurrentRepository {
         }
     }
 
+    public func sourceFolderSnapshots() throws -> [StoredSourceFolderSnapshot] {
+        try database.pool.read { db in
+            try Row.fetchAll(db, sql: "SELECT * FROM source_folders ORDER BY sort_order, name").map { row in
+                guard let id = UUID(uuidString: row["id"]) else {
+                    throw CrosscurrentStorageError.corruptRecord("SourceFolder")
+                }
+                let data: Data? = row["attributes_json"]
+                let attributes = try data.map { try decoder.decode([String: String].self, from: $0) } ?? [:]
+                let sourceValues = try String.fetchAll(
+                    db,
+                    sql: "SELECT source_id FROM source_folder_memberships WHERE folder_id=? ORDER BY sort_order, source_id",
+                    arguments: [id.uuidString.lowercased()]
+                )
+                return StoredSourceFolderSnapshot(
+                    id: id,
+                    parentID: (row["parent_id"] as String?).flatMap(UUID.init(uuidString:)),
+                    name: row["name"],
+                    attributes: attributes,
+                    sortOrder: row["sort_order"],
+                    sourceIDs: sourceValues.compactMap { Self.identifier(SourceID.self, $0) }
+                )
+            }
+        }
+    }
+
     public func entitySnapshots() throws -> [StoredEntitySnapshot] {
         try database.pool.read { db in
             try Row.fetchAll(db, sql: "SELECT e.*, r.id AS revision_id, r.display_name, r.summary, r.created_at AS revision_created_at FROM entities e JOIN entity_revisions r ON r.id=e.current_revision_id ORDER BY r.display_name").map { row in
@@ -1341,10 +1784,21 @@ public actor CrosscurrentRepository {
     public func saveProviderConfiguration(_ configuration: ProviderConfigurationRecord) throws -> Bool {
         try mutate(domains: [.accounts]) { db in
             try db.execute(
-                sql: "INSERT INTO provider_configs (id, provider_kind, display_name, keychain_reference, enabled, configuration_json) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET provider_kind=excluded.provider_kind, display_name=excluded.display_name, keychain_reference=excluded.keychain_reference, enabled=excluded.enabled, configuration_json=excluded.configuration_json",
-                arguments: [configuration.id, configuration.kind, configuration.displayName, configuration.keychainReference, configuration.enabled, configuration.configuration]
+                sql: "INSERT INTO provider_configs (id, provider_kind, display_name, keychain_reference, enabled, configuration_json, health, last_checked_at, last_error, retry_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET provider_kind=excluded.provider_kind, display_name=excluded.display_name, keychain_reference=excluded.keychain_reference, enabled=excluded.enabled, configuration_json=excluded.configuration_json, health=excluded.health, last_checked_at=excluded.last_checked_at, last_error=excluded.last_error, retry_at=excluded.retry_at",
+                arguments: [configuration.id, configuration.kind, configuration.displayName, configuration.keychainReference, configuration.enabled, configuration.configuration, configuration.health, configuration.lastCheckedAt?.timeIntervalSince1970, configuration.lastError, configuration.retryAt?.timeIntervalSince1970]
             )
         }
+    }
+
+    @discardableResult
+    public func recordProviderHealth(id: String, healthy: Bool, error: String? = nil, checkedAt: Date = .now, retryAt: Date? = nil) throws -> Bool {
+        try mutateValue(domains: [.accounts]) { db in
+            try db.execute(
+                sql: "UPDATE provider_configs SET health=?, last_checked_at=?, last_error=?, retry_at=? WHERE id=?",
+                arguments: [healthy ? "healthy" : "failed", checkedAt.timeIntervalSince1970, error, retryAt?.timeIntervalSince1970, id]
+            )
+            return db.changesCount > 0
+        } ?? false
     }
 
     public func activeConstraints() throws -> [ClusteringConstraint] {
@@ -1419,6 +1873,90 @@ public actor CrosscurrentRepository {
         }
     }
 
+    public func qualificationEvidenceRecords() throws -> [QualificationEvidenceRecord] {
+        try database.pool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT i.id AS item_id, i.canonical_key, i.current_revision_id,
+                       r.ordinal, r.title, r.content_hash, sr.display_name, e.connector_kind
+                FROM items i
+                JOIN item_revisions r ON r.id=i.current_revision_id
+                JOIN source_revisions sr ON sr.id=(SELECT current_revision_id FROM sources WHERE id=i.source_id)
+                JOIN source_endpoints e ON e.id=i.endpoint_id
+                ORDER BY sr.display_name, r.published_at DESC, i.id
+                """
+            )
+            return try rows.map { row in
+                guard
+                    let itemID = Self.identifier(ItemID.self, row["item_id"]),
+                    let revisionID = Self.identifier(ItemRevisionID.self, row["current_revision_id"]),
+                    let connector = ConnectorKind(rawValue: row["connector_kind"])
+                else { throw CrosscurrentStorageError.corruptRecord("QualificationEvidence") }
+                let segmentHashes = try String.fetchAll(
+                    db,
+                    sql: "SELECT segment_hash FROM item_segments WHERE item_revision_id=? ORDER BY ordinal",
+                    arguments: [revisionID.description]
+                )
+                let canonical: String = row["canonical_key"]
+                return QualificationEvidenceRecord(
+                    sourceName: row["display_name"],
+                    connector: connector,
+                    canonicalURL: URL(string: canonical),
+                    title: row["title"],
+                    itemID: itemID,
+                    itemRevisionID: revisionID,
+                    revisionOrdinal: row["ordinal"],
+                    contentHash: row["content_hash"],
+                    segmentHashes: segmentHashes
+                )
+            }
+        }
+    }
+
+    public func qualificationEmbeddingEvidence() throws -> [QualificationEmbeddingRecord] {
+        try database.pool.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT i.canonical_key, r.id, r.title, r.plain_text, r.language_code, r.content_hash
+                FROM items i
+                JOIN item_revisions r ON r.id=i.current_revision_id
+                WHERE i.remote_state != 'deleted' AND i.user_deletion_state='active'
+                ORDER BY r.id
+                """
+            )
+            return try rows.map { row in
+                guard let revisionID = Self.identifier(ItemRevisionID.self, row["id"])
+                else { throw CrosscurrentStorageError.corruptRecord("QualificationEmbeddingRecord") }
+                let segmentRows = try Row.fetchAll(
+                    db,
+                    sql: "SELECT id, segment_hash, text FROM item_segments WHERE item_revision_id=? ORDER BY ordinal",
+                    arguments: [revisionID.description]
+                )
+                let segments = try segmentRows.map { segmentRow in
+                    guard let segmentID = Self.identifier(ItemSegmentID.self, segmentRow["id"])
+                    else { throw CrosscurrentStorageError.corruptRecord("QualificationEmbeddingSegment") }
+                    return QualificationEmbeddingRecord.Segment(
+                        id: segmentID,
+                        hash: segmentRow["segment_hash"],
+                        text: segmentRow["text"]
+                    )
+                }
+                let canonical: String = row["canonical_key"]
+                return QualificationEmbeddingRecord(
+                    itemRevisionID: revisionID,
+                    canonicalURL: URL(string: canonical),
+                    title: row["title"],
+                    text: row["plain_text"],
+                    languageCode: row["language_code"],
+                    contentHash: row["content_hash"],
+                    segments: segments
+                )
+            }
+        }
+    }
+
     public func sourceEndpoint(id: SourceEndpointID) throws -> SourceEndpoint? {
         try database.pool.read { db in
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM source_endpoints WHERE id=?", arguments: [id.description]) else { return nil }
@@ -1440,6 +1978,74 @@ public actor CrosscurrentRepository {
                 contentPrivacy: privacy,
                 health: health,
                 lastSuccessfulSync: (row["last_successful_sync"] as Double?).map(Date.init(timeIntervalSince1970:))
+            )
+        }
+    }
+
+    public func sourceEndpointHealth() throws -> [StoredEndpointHealth] {
+        try database.pool.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT e.id, e.health, e.last_successful_sync,
+                       (SELECT MAX(started_at) FROM sync_runs r WHERE r.endpoint_id=e.id) AS last_attempt,
+                       (SELECT MAX(completed_at) FROM sync_runs r WHERE r.endpoint_id=e.id AND r.error_class IS NOT NULL) AS last_failure,
+                       (SELECT h.message FROM connector_health_events h
+                        WHERE h.endpoint_id=e.id AND h.health != 'healthy'
+                        ORDER BY h.observed_at DESC LIMIT 1) AS failure_message,
+                       (SELECT MIN(j.next_attempt_at) FROM jobs j
+                        WHERE j.kind='refresh' AND j.input_hash=e.id AND j.state IN ('pending','failed')) AS next_retry,
+                       (SELECT cursor_family FROM sync_cursors c WHERE c.endpoint_id=e.id) AS cursor_family,
+                       (SELECT COUNT(*) FROM items i WHERE i.endpoint_id=e.id) AS item_count
+                FROM source_endpoints e
+                ORDER BY e.id
+                """)
+            return try rows.map { row in
+                guard let endpointID = Self.identifier(SourceEndpointID.self, row["id"]),
+                      let health = ConnectorHealth(rawValue: row["health"])
+                else { throw CrosscurrentStorageError.corruptRecord("StoredEndpointHealth") }
+                return StoredEndpointHealth(
+                    endpointID: endpointID,
+                    health: health,
+                    lastSuccess: (row["last_successful_sync"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                    lastAttempt: (row["last_attempt"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                    lastFailure: (row["last_failure"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                    lastFailureMessage: row["failure_message"],
+                    nextRetry: (row["next_retry"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                    cursorFamily: row["cursor_family"],
+                    itemCount: row["item_count"]
+                )
+            }
+        }
+    }
+
+    public func itemDetail(itemID: ItemID, revisionID: String? = nil) throws -> StoredItemDetail? {
+        try database.pool.read { db -> StoredItemDetail? in
+            let row = try Row.fetchOne(db, sql: """
+                SELECT i.id, i.current_revision_id, i.canonical_key, ir.id AS revision_id,
+                       ir.title, ir.author, ir.plain_text, ir.published_at, sr.display_name, ep.account_id
+                FROM items i
+                JOIN item_revisions ir ON ir.item_id=i.id
+                JOIN source_endpoints ep ON ep.id=i.endpoint_id
+                JOIN source_revisions sr ON sr.id=(SELECT current_revision_id FROM sources WHERE id=i.source_id)
+                WHERE i.id=? AND ir.id=COALESCE(?, i.current_revision_id)
+                LIMIT 1
+                """, arguments: [itemID.description, revisionID])
+            guard let row,
+                  let resolvedItemID = Self.identifier(ItemID.self, row["id"]),
+                  let resolvedRevisionID = Self.identifier(ItemRevisionID.self, row["revision_id"])
+            else { return nil }
+            let currentRevision: String = row["current_revision_id"]
+            let canonical: String = row["canonical_key"]
+            return StoredItemDetail(
+                id: resolvedItemID,
+                revisionID: resolvedRevisionID,
+                title: row["title"],
+                author: row["author"],
+                sourceName: row["display_name"],
+                text: row["plain_text"],
+                canonicalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
+                originalAccountID: Self.identifier(ConnectorAccountID.self, row["account_id"] as String?),
+                publishedAt: (row["published_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                isHistorical: currentRevision != resolvedRevisionID.description
             )
         }
     }
@@ -1652,6 +2258,8 @@ public actor CrosscurrentRepository {
             let eventID = identifier(EventID.self, row["event_id"]),
             let changeKind = RevisionChangeKind(rawValue: row["change_kind"])
         else { throw CrosscurrentStorageError.corruptRecord("EventRevision") }
+        let metadata: Data? = row["generation_metadata_json"]
+        let primaryReasonTrace: [String] = metadata.flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
         return EventRevision(
             id: id,
             eventID: eventID,
@@ -1662,6 +2270,7 @@ public actor CrosscurrentRepository {
             endedAt: (row["ended_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
             changeKind: changeKind,
             primaryMembershipAssertionID: identifier(MembershipAssertionID.self, row["primary_membership_assertion_id"] as String?),
+            primaryReasonTrace: primaryReasonTrace,
             createdAt: Date(timeIntervalSince1970: row["created_at"])
         )
     }
@@ -1757,6 +2366,14 @@ public actor CrosscurrentRepository {
     private static func identifier<Kind>(_ type: Identifier<Kind>.Type, _ string: String?) -> Identifier<Kind>? {
         guard let string, let uuid = UUID(uuidString: string) else { return nil }
         return Identifier<Kind>(uuid)
+    }
+
+    private static func normalizedAssertionName(_ value: String) -> String {
+        value.precomposedStringWithCanonicalMapping
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
     }
 
     private static let dayFormatter: DateFormatter = {

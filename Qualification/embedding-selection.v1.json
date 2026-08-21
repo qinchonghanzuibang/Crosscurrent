@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "decision": "development-selected-release-qualification-pending",
+  "selectedCandidateID": "multilingual-e5-small-ort-cpu",
+  "selectedModel": "intfloat/multilingual-e5-small",
+  "selectedModelRevision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+  "selectedRuntime": "ONNX Runtime CPU",
+  "selectedRuntimeRevision": "1.29.0 official macOS arm64 dylib",
+  "qualificationHost": {
+    "modelIdentifier": "Mac17,9",
+    "chip": "Apple M5 Pro",
+    "ramBytes": 51539607552,
+    "macOS": "26.6.2",
+    "build": "25G83",
+    "lowPowerMode": false,
+    "thermalState": "nominal"
+  },
+  "selectionRationale": [
+    "All tokenizer references and all hash-bound retrieval judgments passed, including the three cross-language positive pairs.",
+    "Independent Python ONNX Runtime reference vectors matched with cosine similarity above 0.9999999999998 and maximum absolute difference below 1.1e-7 on all registered references.",
+    "The pair is operationally heavier than native MiniLM/Core ML and MLX, but it is the only measured compact pair with complete tokenizer, vector, multilingual-retrieval, and packaging-path evidence in this qualification pass.",
+    "Measured performance is recorded as Pareto evidence, not an invented product hard gate."
+  ],
+  "measurements": {
+    "coldStartMilliseconds": 1859.74275,
+    "p50WarmLatencyMilliseconds": 45.497917,
+    "p95WarmLatencyMilliseconds": 46.219291,
+    "batchSegmentsPerSecond": 25.132875968607507,
+    "peakResidentBytes": 1541275648,
+    "executableBytes": 22775968,
+    "modelArtifactBytes": 487354145,
+    "runtimeArtifactBytes": 203104607
+  },
+  "alternatives": [
+    {
+      "candidateID": "minilm-l12-native-coreml-all",
+      "disposition": "promising-but-not-selected",
+      "reason": "Passed the small casebook with the smallest model/runtime footprint and lower measured RSS, but no independent reference vector is yet registered for its pinned upstream Core ML export. It remains the leading simplification candidate for a future requalification."
+    },
+    {
+      "candidateID": "minilm-l12-native-coreml-cpuOnly",
+      "disposition": "dominated-on-this-host",
+      "reason": "Passed the casebook but was slower and used materially more peak RSS than the all-compute native Core ML configuration; independent vector parity also remains open."
+    },
+    {
+      "candidateID": "multilingual-e5-small-mlx",
+      "disposition": "rejected-current-path",
+      "reason": "Fastest measured pair with the lowest E5 runtime RSS, but its vectors were nearly orthogonal to the independent reference and it missed the Chinese-to-English anonymous-credentials retrieval judgment. A future maintained conversion may be requalified as a new candidate."
+    },
+    {
+      "candidateID": "multilingual-e5-small-ort-coreml",
+      "disposition": "dominated-on-this-host",
+      "reason": "Matched reference vectors and retrieval, but only 562 of 623 nodes were accepted across 38 Core ML partitions; repeated unbounded-shape conversion failures, CPU fallback, higher latency, lower throughput, and 14.7 GB measured peak RSS make this configuration unsuitable."
+    },
+    {
+      "candidateID": "swift-transformers-runtime-scope",
+      "disposition": "not-a-complete-pair",
+      "reason": "Retained for tokenizer parity, but it is not independently a maintained encoder execution runtime and Crosscurrent will not build a bespoke tensor engine."
+    },
+    {
+      "candidateID": "gte-multilingual-base-quality-ceiling",
+      "disposition": "not-triggered",
+      "reason": "The compact candidates did not expose a casebook quality ceiling that justifies this larger conditional candidate."
+    },
+    {
+      "candidateID": "bge-m3-mlx-quality-ceiling",
+      "disposition": "not-triggered",
+      "reason": "The compact candidates did not expose a casebook quality ceiling that justifies this substantially larger conditional candidate."
+    }
+  ],
+  "releaseLimitations": [
+    "No representative slower or baseline M1-class Apple-silicon Mac was available; this host does not establish baseline-device performance.",
+    "Repeated local runs may benefit from filesystem cache; the measured cold-start value is process initialization on the recorded host, not a cold-disk guarantee.",
+    "The official ONNX Runtime distribution is a thin arm64 dylib; final framework/dylib embedding, hardened-runtime signing, notarization, Sparkle update, rollback, and third-party-notice packaging remain release gates.",
+    "The current machine has no valid signing identity, so production selection and signed-archive qualification remain pending."
+  ]
+}

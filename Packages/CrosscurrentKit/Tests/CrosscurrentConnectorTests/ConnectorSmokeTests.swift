@@ -39,3 +39,13 @@ private actor MockBrowserCreatorClient: BrowserCreatorSessionClient {
     #expect(result.endpoints.first?.contentPrivacy == .public)
     #expect(result.entityCandidates.first?.kind == .person)
 }
+
+@Test func authenticatedCreatorDoesNotClaimAnUncapturedListingContract() {
+    let identity = BrowserCreatorIdentity(stableCreatorID: "creator-1", displayName: "Public Creator", profileURL: URL(string: "https://x.com/creator")!, entityKind: .person, recentItems: [])
+    let connector = AuthenticatedCreatorConnector(platform: .x, browser: MockBrowserCreatorClient(identity: identity))
+    #expect(connector.qualificationState == .captureRequired)
+    #expect(connector.capabilities == [.discovery, .authentication, .browserRequired])
+    #expect(!connector.capabilities.contains(.pagination))
+    #expect(!connector.capabilities.contains(.backgroundRefresh))
+    #expect(!connector.capabilities.contains(.deletionSignals))
+}

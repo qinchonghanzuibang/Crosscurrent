@@ -15,10 +15,12 @@ public enum CrosscurrentJobKind {
 public struct RefreshJobPayload: Codable, Hashable, Sendable {
     public var endpointID: SourceEndpointID
     public var maximumPages: Int
+    public var maximumItems: Int?
 
-    public init(endpointID: SourceEndpointID, maximumPages: Int = 10) {
+    public init(endpointID: SourceEndpointID, maximumPages: Int = 10, maximumItems: Int? = nil) {
         self.endpointID = endpointID
         self.maximumPages = max(1, min(maximumPages, 100))
+        self.maximumItems = maximumItems.map { max(1, min($0, 10_000)) }
     }
 }
 
@@ -49,11 +51,13 @@ public actor RefreshJobExecutor {
     private let repository: CrosscurrentRepository
     private let connectors: ConnectorRegistry
     private let ingestion: IngestionPipeline
+    private let articleEnricher: ArticleContentEnricher
 
-    public init(repository: CrosscurrentRepository, connectors: ConnectorRegistry, blobStore: CanonicalBlobStore? = nil) {
+    public init(repository: CrosscurrentRepository, connectors: ConnectorRegistry, blobStore: CanonicalBlobStore? = nil, http: any ConnectorHTTPClient = URLSessionConnectorHTTPClient()) {
         self.repository = repository
         self.connectors = connectors
         ingestion = IngestionPipeline(repository: repository, blobStore: blobStore)
+        articleEnricher = ArticleContentEnricher(http: http)
     }
 
     public func execute(job: DurableJob, lease initialLease: JobLease) async throws -> RefreshJobCheckpoint {
@@ -74,8 +78,10 @@ public actor RefreshJobExecutor {
             if lease.expiresAt.timeIntervalSinceNow < 30 { lease = try await repository.renewLease(lease, duration: 120) }
 
             let page = try await connector.refresh(endpoint: endpoint, cursor: cursor, context: ConnectorContext())
-            for candidate in page.candidates {
-                let complete = try await connector.fetchContent(candidate: candidate, context: ConnectorContext())
+            let remaining = payload.maximumItems.map { max(0, $0 - candidateCount) } ?? page.candidates.count
+            for candidate in page.candidates.prefix(remaining) {
+                let fetched = try await connector.fetchContent(candidate: candidate, context: ConnectorContext())
+                let complete = try await articleEnricher.enrich(fetched, connector: endpoint.connector)
                 let result = try await ingestion.ingest(candidate: complete, sourceID: endpoint.sourceID, endpointID: endpoint.id)
                 candidateCount += 1
                 if result.createdRevision { revisionCount += 1 }
@@ -83,7 +89,7 @@ public actor RefreshJobExecutor {
             _ = try await repository.markRemoteDeleted(endpointID: endpoint.id, externalIDs: page.deletionExternalIDs)
             cursor = page.nextCursor
             pages += 1
-            if page.reachedEnd || page.nextCursor == nil { break }
+            if page.reachedEnd || page.nextCursor == nil || payload.maximumItems.map({ candidateCount >= $0 }) == true { break }
         }
 
         let stored = cursor.map { StoredSyncCursor(family: $0.family, data: $0.value) }

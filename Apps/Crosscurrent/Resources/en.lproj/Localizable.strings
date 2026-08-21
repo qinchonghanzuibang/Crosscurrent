@@ -190,3 +190,11 @@
 "Global-focused" = "Global-focused";
 "Mixed coverage" = "Mixed coverage";
 "Unknown coverage" = "Unknown coverage";
+"No Event currently meets the evidence and relevance bar for the top five. The remaining briefing stays available below." = "No Event currently meets the evidence and relevance bar for the top five. The remaining briefing stays available below.";
+"Added %lld starter Sources; %lld need attention." = "Added %lld starter Sources; %lld need attention.";
+"Lexical" = "Lexical";
+"Semantic" = "Semantic";
+"Lexical search active · local embedding asset not installed" = "Lexical search active · local embedding asset not installed";
+"Validating local embedding asset…" = "Validating local embedding asset…";
+"Semantic search active · %lld current documents" = "Semantic search active · %lld current documents";
+"Lexical search active · embedding unavailable: %@" = "Lexical search active · embedding unavailable: %@";

@@ -11,6 +11,9 @@ struct EventDetailView: View {
     @State private var choosingMergeTarget = false
     @State private var evidence: [StoredEventEvidence] = []
     @State private var history: [StoredEventRevisionSummary] = []
+    @State private var coverage = StoredCoverageComparison()
+    @State private var perspectiveSynthesis = ""
+    @State private var perspectiveSynthesisStatus = ""
 
     private var event: EventCardModel? { model.events.first { $0.id == model.selectedEventID } }
 
@@ -24,7 +27,7 @@ struct EventDetailView: View {
                 Divider()
                 Group {
                     switch tab {
-                    case "Reader": ReaderPane(event: event)
+                    case "Reader": ReaderPane(event: event, evidence: evidence)
                     case "Primary": primarySource(event)
                     case "Sources": sources
                     case "Timeline": timeline(event)
@@ -37,8 +40,10 @@ struct EventDetailView: View {
             .task(id: event.id) {
                 async let loadedEvidence = model.evidence(for: event.id)
                 async let loadedHistory = model.revisionHistory(for: event.id)
+                async let loadedCoverage = model.coverageComparison(for: event.id)
                 evidence = await loadedEvidence
                 history = await loadedHistory
+                coverage = await loadedCoverage
             }
             .toolbar {
                 ToolbarItemGroup {
@@ -92,16 +97,12 @@ struct EventDetailView: View {
                 Text(event.summary).font(.title3)
                 SectionRule("Evidence", trailing: String.localizedStringWithFormat(String(localized: "%lld exact assertions"), evidence.count))
                 if evidence.isEmpty {
-                    EvidenceRow(source: event.primarySource, title: event.title, text: event.summary, metadata: String(localized: "Fixture preview; canonical Events retain exact ItemRevision and ItemSegment spans."))
+                    ContentUnavailableView("No canonical evidence loaded", systemImage: "doc.text.magnifyingglass")
                 } else {
                     ForEach(evidence.prefix(3)) { assertion in
                         EvidenceRow(source: assertion.sourceName, title: assertion.title, text: assertion.excerpt, metadata: evidenceMetadata(assertion))
                     }
                 }
-                SectionRule("Related stories")
-                let related = model.events.filter { candidate in candidate.id != event.id && !Set(candidate.topics).isDisjoint(with: event.topics) }.prefix(4)
-                if related.isEmpty { Text("No related current Events.").foregroundStyle(.secondary) }
-                else { ForEach(Array(related)) { candidate in Button(candidate.title) { model.open(candidate) }.buttonStyle(.link) } }
             }.padding(28).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
         }
     }
@@ -113,7 +114,7 @@ struct EventDetailView: View {
                 if let primary = evidence.first(where: \.isPrimary) {
                     EvidenceRow(source: primary.sourceName, title: primary.title, text: primary.excerpt, metadata: evidenceMetadata(primary))
                 } else {
-                    EvidenceRow(source: event.primarySource, title: event.title, text: event.summary, metadata: String(localized: "Canonical primary-source provenance is unavailable in this fixture preview."))
+                    ContentUnavailableView("Primary evidence unavailable", systemImage: "doc.badge.ellipsis")
                 }
                 Text("Primary-source selection is deterministic and the EventRevision stores the exact membership assertion; later revisions never rewrite this provenance.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -139,7 +140,7 @@ struct EventDetailView: View {
     private func timeline(_ event: EventCardModel) -> some View {
         Group {
             if history.isEmpty {
-                List { Label("Current fixture revision · \(event.date.formatted())", systemImage: "circle.fill") }
+                ContentUnavailableView("No revision history loaded", systemImage: "clock.arrow.circlepath")
             } else {
                 List(history) { revision in
                     HStack(alignment: .top, spacing: 12) {
@@ -169,17 +170,76 @@ struct EventDetailView: View {
                         EvidenceRow(source: assertion.sourceName, title: assertion.title, text: assertion.excerpt, metadata: evidenceMetadata(assertion))
                     }
                 }
-                if event.reasons.contains(.chinaGlobalCoverage) {
-                    SectionRule("China ↔ Global")
-                    Text("Shown only because the stored coverage assertions meet the two-independent-groups-per-ecosystem threshold. Language and nationality are not used as proxies.")
+                SectionRule("Coverage Comparison", trailing: coverage.isQualified ? String(localized: "Evidence-qualified") : String(localized: "More classified evidence needed"))
+                HStack(alignment: .top, spacing: 16) {
+                    coverageColumn("China-focused", evidence: coverage.chinaFocused)
+                    coverageColumn("Global-focused", evidence: coverage.globalFocused)
+                }
+                Text("This provider-free comparison shows classified independent Sources, timing, primary evidence, and factual evidence excerpts. It does not infer framing, sentiment, motive, language, or nationality.")
+                    .font(.caption).foregroundStyle(.secondary)
+                SectionRule("Perspective Synthesis")
+                if model.providerConfigured {
+                    Button("Generate cited perspective synthesis") { Task { await generatePerspectiveSynthesis(event) } }
+                        .disabled(!coverage.isQualified || perspectiveSynthesisStatus == String(localized: "Generating…"))
+                    if !perspectiveSynthesisStatus.isEmpty { Text(perspectiveSynthesisStatus).font(.caption).foregroundStyle(.secondary) }
+                    if !perspectiveSynthesis.isEmpty { Text(perspectiveSynthesis).textSelection(.enabled) }
+                } else {
+                    Text("Configure a policy-permitted reasoning provider to synthesize framing or emphasis differences with citations. Crosscurrent does not generate a pseudo-semantic narrative without one.")
+                        .foregroundStyle(.secondary)
                 }
             }.padding(28).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
         }
     }
 
+    private func coverageColumn(_ title: LocalizedStringKey, evidence: [StoredCoverageEvidence]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.headline)
+            Text("\(Set(evidence.map(\.independenceGroup)).count) independent Sources · \(evidence.count) evidence spans")
+                .font(.caption).foregroundStyle(.secondary)
+            if evidence.isEmpty {
+                Text("No classified evidence").foregroundStyle(.tertiary)
+            } else {
+                ForEach(evidence.prefix(4)) { item in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack { Text(item.sourceName).font(.subheadline.bold()); if item.isPrimary { StatusPill("Primary") } }
+                        Text(item.title).font(.caption).lineLimit(2)
+                        Text(item.excerpt).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                        if let date = item.publishedAt { Text(date, style: .relative).font(.caption2).foregroundStyle(.tertiary) }
+                    }
+                    .padding(10)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
     private func evidenceMetadata(_ assertion: StoredEventEvidence) -> String {
         let primary = assertion.isPrimary ? String(localized: "Primary") : assertion.role.rawValue.capitalized
         return "\(primary) · ItemRevision \(assertion.itemRevisionID.description.prefix(8)) · bytes \(assertion.span.utf8Start)–\(assertion.span.utf8Start + assertion.span.utf8Length)"
+    }
+
+    private func generatePerspectiveSynthesis(_ event: EventCardModel) async {
+        guard coverage.isQualified else {
+            perspectiveSynthesisStatus = String(localized: "More classified independent evidence is required.")
+            return
+        }
+        let inputs = (coverage.chinaFocused + coverage.globalFocused).enumerated().map { index, item in
+            "[E\(index + 1)] ecosystem=\(item.ecosystem.rawValue); source=\(item.sourceName); membership=\(item.id.description); primary=\(item.isPrimary); published=\(item.publishedAt?.ISO8601Format() ?? "unknown")\n\(item.excerpt)"
+        }.joined(separator: "\n\n")
+        perspectiveSynthesisStatus = String(localized: "Generating…")
+        do {
+            let result = try await model.performAI(
+                task: .chinaGlobalComparison,
+                input: "Describe only supported framing, emphasis, or claim-presence differences. Cite every statement with one or more [E#] labels. Keep language, information ecosystem, publisher location, and nationality separate.\n\n\(inputs)",
+                event: event
+            )
+            guard result.contains("[E") else { throw AIProviderError.invalidResponse }
+            perspectiveSynthesis = result
+            perspectiveSynthesisStatus = String(localized: "Generated with the configured reasoning route; citations map to exact membership assertions above.")
+        } catch {
+            perspectiveSynthesisStatus = error.localizedDescription
+        }
     }
 }
 
@@ -248,6 +308,7 @@ private extension RevisionChangeKind {
 private struct ReaderPane: View {
     @EnvironmentObject private var model: AppModel
     var event: EventCardModel
+    var evidence: [StoredEventEvidence]
     @State private var selection: ReaderSelectionContext?
     @State private var activatedLink: URL?
     @State private var linkPreview: LinkPreview?
@@ -267,11 +328,9 @@ private struct ReaderPane: View {
                     Button("Ask AI") { runSelection(.askAI) }
                 }.disabled(selection == nil)
                 Menu("Article actions") {
-                    Button("Summary") { show(String(localized: "Summary"), event.summary) }
+                    Button("Summary") { show(String(localized: "Summary"), extractiveSummary) }
                     Button("Key points") { show(String(localized: "Key points"), extractiveKeyPoints) }
                     Button("Ask article") { runAI(task: .askArticle, title: String(localized: "Ask article"), input: event.summary) }
-                    Button("Related Events") { show(String(localized: "Related Events"), String(localized: "Related Events are ranked from current revisions and exact evidence memberships.")) }
-                    Button("Related saved content") { show(String(localized: "Related saved content"), String(localized: "Related saved content uses revision-aware similarity and explicit user saves.")) }
                     Divider()
                     Button("Open original") { openOriginal() }.disabled(event.originalURL == nil)
                 }
@@ -311,8 +370,23 @@ private struct ReaderPane: View {
         }
     }
 
+    private var extractiveSummary: String {
+        guard let primary = evidence.first(where: \.isPrimary) ?? evidence.first else { return event.summary }
+        return "\(primary.excerpt)\n\n[\(citation(primary))]"
+    }
+
     private var extractiveKeyPoints: String {
-        event.summary.split(separator: ".").prefix(3).map { "• \($0.trimmingCharacters(in: .whitespacesAndNewlines))" }.joined(separator: "\n")
+        let selected = evidence.reduce(into: [StoredEventEvidence]()) { values, assertion in
+            guard values.count < 3, !values.contains(where: { $0.excerpt == assertion.excerpt }) else { return }
+            values.append(assertion)
+        }
+        guard !selected.isEmpty else { return event.summary }
+        return selected.map { "• \($0.excerpt)\n  [\(citation($0))]" }.joined(separator: "\n")
+    }
+
+    private func citation(_ assertion: StoredEventEvidence) -> String {
+        let end = assertion.span.utf8Start + assertion.span.utf8Length
+        return "\(assertion.sourceName) · ItemRevision \(assertion.itemRevisionID.description) · bytes \(assertion.span.utf8Start)–\(end)"
     }
 
     private func runSelection(_ action: ReaderSelectionAction) {

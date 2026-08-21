@@ -20,18 +20,27 @@ public struct EvidenceMaintenanceResult: Codable, Hashable, Sendable {
 /// scorer, but their absence never prevents conservative deterministic clustering.
 public actor EvidenceEventMaintainer {
     private let repository: CrosscurrentRepository
+    private let deduplication: EvidenceDeduplicationService
 
-    public init(repository: CrosscurrentRepository) { self.repository = repository }
+    public init(repository: CrosscurrentRepository) {
+        self.repository = repository
+        deduplication = EvidenceDeduplicationService(repository: repository)
+    }
 
     public func run(limit: Int = 250) async throws -> EvidenceMaintenanceResult {
+        _ = try await deduplication.run(limit: max(500, limit * 4))
         let pending = try await repository.pendingEvidenceSegments(limit: limit)
         guard !pending.isEmpty else { return EvidenceMaintenanceResult() }
         let constraints = try await repository.activeConstraints()
         var aggregates = try await repository.currentEventAggregates(limit: 2_000)
+        var signalCache: [EventID: StoredClusteringSignals] = [:]
+        for aggregate in aggregates {
+            signalCache[aggregate.event.id] = try await repository.clusteringSignals(eventRevisionID: aggregate.revision.id)
+        }
         var result = EvidenceMaintenanceResult(evidenceSegments: pending.count)
 
         for evidence in pending {
-            let scores = aggregates.map { candidateScore(evidence: evidence, event: $0) }
+            let scores = aggregates.map { candidateScore(evidence: evidence, event: $0, signals: signalCache[$0.event.id] ?? StoredClusteringSignals()) }
             let assignment = DeterministicClusteringEngine.assign(
                 segmentLineageID: evidence.segment.lineageID,
                 candidates: scores,
@@ -41,6 +50,7 @@ public actor EvidenceEventMaintainer {
             if assignment.eventIDs.isEmpty {
                 let created = try await createEvent(from: evidence)
                 aggregates.append(created)
+                signalCache[created.event.id] = StoredClusteringSignals(entityIDs: evidence.entityIDs, topicIDs: evidence.topicIDs)
                 result.eventsCreated += 1
                 result.eventRevisionsCreated += 1
                 continue
@@ -51,6 +61,7 @@ public actor EvidenceEventMaintainer {
                 guard let index = aggregates.firstIndex(where: { $0.event.id == eventID }) else { continue }
                 let updated = try await append(evidence, to: aggregates[index], forced: assignment.wasForcedByUser)
                 aggregates[index] = updated
+                signalCache[eventID] = try await repository.clusteringSignals(eventRevisionID: updated.revision.id)
                 result.eventRevisionsCreated += 1
                 committed = true
             }
@@ -70,7 +81,7 @@ public actor EvidenceEventMaintainer {
             role: .primary,
             confidence: Confidence(0.86),
             identityWeight: 1,
-            independenceGroup: evidence.sourceID.description,
+            independenceGroup: evidence.independenceGroup,
             provenance: .deterministic
         )
         let revision = EventRevision(
@@ -80,7 +91,8 @@ public actor EvidenceEventMaintainer {
             startedAt: evidence.itemRevision.publishedAt ?? evidence.itemRevision.fetchedAt,
             endedAt: evidence.itemRevision.modifiedAt ?? evidence.itemRevision.publishedAt,
             changeKind: .initial,
-            primaryMembershipAssertionID: membership.id
+            primaryMembershipAssertionID: membership.id,
+            primaryReasonTrace: primaryReasons(for: evidence)
         )
         let event = Event(id: eventID, currentRevisionID: revision.id)
         _ = try await repository.saveEvent(
@@ -93,7 +105,7 @@ public actor EvidenceEventMaintainer {
     }
 
     private func append(_ evidence: PendingEvidenceSegment, to aggregate: StoredEventAggregate, forced: Bool) async throws -> StoredEventAggregate {
-        let sourceAlreadyPresent = aggregate.memberships.contains { $0.independenceGroup == evidence.sourceID.description }
+        let sourceAlreadyPresent = aggregate.memberships.contains { $0.independenceGroup == evidence.independenceGroup }
         let membership = EventMembershipAssertion(
             eventID: aggregate.event.id,
             itemRevisionID: evidence.itemRevision.id,
@@ -103,7 +115,7 @@ public actor EvidenceEventMaintainer {
             role: sourceAlreadyPresent ? .repeated : .independent,
             confidence: forced ? .certain : Confidence(0.78),
             identityWeight: forced ? 1.5 : 1,
-            independenceGroup: evidence.sourceID.description,
+            independenceGroup: evidence.independenceGroup,
             provenance: forced ? .user : .deterministic
         )
         let memberships = aggregate.memberships + [membership]
@@ -113,15 +125,22 @@ public actor EvidenceEventMaintainer {
         default: changeKind = sourceAlreadyPresent ? .contentUpdate : .majorUpdate
         }
         let summary = aggregate.revision.summary.isEmpty ? providerFreeSummary(evidence) : aggregate.revision.summary
+        let primary = try await selectPrimary(
+            evidence: evidence,
+            newMembershipID: membership.id,
+            currentMembershipID: aggregate.revision.primaryMembershipAssertionID,
+            existingTrace: aggregate.revision.primaryReasonTrace
+        )
         let revision = EventRevision(
             eventID: aggregate.event.id,
             ordinal: aggregate.revision.ordinal + 1,
-            title: aggregate.revision.title,
+            title: primary.selectedNew ? evidence.itemRevision.title : aggregate.revision.title,
             summary: summary,
             startedAt: minDate(aggregate.revision.startedAt, evidence.itemRevision.publishedAt ?? evidence.itemRevision.fetchedAt),
             endedAt: maxDate(aggregate.revision.endedAt, evidence.itemRevision.modifiedAt ?? evidence.itemRevision.publishedAt ?? evidence.itemRevision.fetchedAt),
             changeKind: changeKind,
-            primaryMembershipAssertionID: aggregate.revision.primaryMembershipAssertionID ?? membership.id
+            primaryMembershipAssertionID: primary.membershipID,
+            primaryReasonTrace: primary.reasons
         )
         let event = Event(id: aggregate.event.id, currentRevisionID: revision.id, createdAt: aggregate.event.createdAt)
         _ = try await repository.saveEvent(
@@ -133,20 +152,87 @@ public actor EvidenceEventMaintainer {
         return StoredEventAggregate(event: event, revision: revision, memberships: memberships)
     }
 
-    private func candidateScore(evidence: PendingEvidenceSegment, event: StoredEventAggregate) -> EventCandidateScore {
+    private func selectPrimary(
+        evidence: PendingEvidenceSegment,
+        newMembershipID: MembershipAssertionID,
+        currentMembershipID: MembershipAssertionID?,
+        existingTrace: [String]
+    ) async throws -> (membershipID: MembershipAssertionID, reasons: [String], selectedNew: Bool) {
+        guard let currentMembershipID else {
+            return (newMembershipID, primaryReasons(for: evidence), true)
+        }
+        guard let current = try await repository.primarySourceSignals(membershipID: currentMembershipID) else {
+            return (newMembershipID, primaryReasons(for: evidence), true)
+        }
+        if current.provenance == .user {
+            return (currentMembershipID, existingTrace + ["user override remains authoritative"], false)
+        }
+        let newScore = primaryScore(
+            connector: evidence.connector,
+            official: evidence.isOfficialSource,
+            url: evidence.canonicalURL,
+            textLength: evidence.itemRevision.text.utf8.count,
+            publishedAt: evidence.itemRevision.publishedAt
+        )
+        let currentScore = primaryScore(
+            connector: current.connector,
+            official: current.isOfficialRelationship,
+            url: current.canonicalURL,
+            textLength: current.textLength,
+            publishedAt: current.publishedAt
+        )
+        guard newScore > currentScore + 0.08 else {
+            return (currentMembershipID, existingTrace.isEmpty ? ["retained stronger direct evidence"] : existingTrace, false)
+        }
+        return (newMembershipID, primaryReasons(for: evidence), true)
+    }
+
+    private func primaryScore(connector: ConnectorKind, official: Bool, url: URL?, textLength: Int, publishedAt: Date?) -> Double {
+        var score = official ? 0.45 : 0
+        switch connector {
+        case .github: score += 0.42
+        case .arxiv: score += 0.46
+        case .bluesky, .x: score += 0.16
+        case .rss, .atom, .jsonFeed, .website: score += 0.12
+        default: break
+        }
+        let host = url?.host?.lowercased() ?? ""
+        if host == "github.com" || host.hasSuffix("arxiv.org") { score += 0.18 }
+        score += min(0.16, Double(textLength) / 25_000)
+        if publishedAt != nil { score += 0.04 }
+        return score
+    }
+
+    private func primaryReasons(for evidence: PendingEvidenceSegment) -> [String] {
+        var reasons: [String] = []
+        if evidence.isOfficialSource { reasons.append("first-party Source/entity relationship") }
+        switch evidence.connector {
+        case .github: reasons.append("official repository artifact")
+        case .arxiv: reasons.append("paper record")
+        case .bluesky, .x: reasons.append("author account evidence")
+        default: break
+        }
+        if evidence.itemRevision.text.utf8.count >= 1_200 { reasons.append("complete source text") }
+        if evidence.itemRevision.publishedAt != nil { reasons.append("connector publication timestamp") }
+        return reasons.isEmpty ? ["most direct available evidence"] : reasons
+    }
+
+    private func candidateScore(evidence: PendingEvidenceSegment, event: StoredEventAggregate, signals: StoredClusteringSignals) -> EventCandidateScore {
         let segmentSimilarity = similarity(evidence.segment.text, event.revision.summary + " " + event.revision.title)
         let titleSimilarity = similarity(evidence.itemRevision.title, event.revision.title)
         let referenceDate = evidence.itemRevision.publishedAt ?? evidence.itemRevision.fetchedAt
         let eventDate = event.revision.endedAt ?? event.revision.startedAt ?? event.revision.createdAt
         let days = abs(referenceDate.timeIntervalSince(eventDate)) / 86_400
         let temporal = max(0, 1 - days / 14)
-        let sameSource = event.memberships.contains { $0.independenceGroup == evidence.sourceID.description }
+        let sameSource = event.memberships.contains { $0.independenceGroup == evidence.independenceGroup }
         let semanticProxy = max(segmentSimilarity, titleSimilarity)
+        let entityOverlap = overlap(evidence.entityIDs, signals.entityIDs)
+        let topicOverlap = overlap(evidence.topicIDs, signals.topicIDs)
         return EventCandidateScore(
             eventID: event.event.id,
             semantic: semanticProxy,
-            entityOverlap: 0,
-            topicOverlap: 0,
+            entityOverlap: entityOverlap,
+            topicOverlap: topicOverlap,
             temporal: temporal,
             title: titleSimilarity,
             citation: 0,
@@ -154,6 +240,11 @@ public actor EvidenceEventMaintainer {
             coherence: segmentSimilarity,
             memberLineages: Set(event.memberships.map(\.segmentLineageID))
         )
+    }
+
+    private func overlap<T>(_ lhs: Set<T>, _ rhs: Set<T>) -> Double where T: Hashable {
+        guard !lhs.isEmpty, !rhs.isEmpty else { return 0 }
+        return Double(lhs.intersection(rhs).count) / Double(min(lhs.count, rhs.count))
     }
 
     private func providerFreeSummary(_ evidence: PendingEvidenceSegment) -> String {

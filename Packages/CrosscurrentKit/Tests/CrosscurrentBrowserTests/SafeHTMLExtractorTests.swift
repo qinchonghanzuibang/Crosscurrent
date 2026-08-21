@@ -59,6 +59,28 @@ func sanitizerPreservesSafeSVGAndMathMLWithoutExecutableSubtrees() throws {
     #expect(!output.contains("javascript:"))
 }
 
+@Test func authenticatedPlatformCaptureFixturesAreVersionedAndSecretRedacted() throws {
+    let fixture = BrowserPlatformCaptureFixture(
+        schemaVersion: 1,
+        platform: .weChatOfficialAccount,
+        kind: .listing,
+        finalURLWithoutQuery: try #require(URL(string: "https://mp.weixin.qq.com/profile")),
+        title: "Account listing",
+        topLevelElementCounts: ["article": 5],
+        resourceOrigins: ["https://res.wx.qq.com"]
+    )
+    let data = try JSONEncoder().encode(BrowserWorkerResponse.captureFixture(fixture))
+    let decoded = try JSONDecoder().decode(BrowserWorkerResponse.self, from: data)
+    guard case let .captureFixture(value) = decoded else {
+        Issue.record("Capture response did not round-trip")
+        return
+    }
+    #expect(value.schemaVersion == 1)
+    #expect(value.finalURLWithoutQuery.query == nil)
+    #expect(value.finalURLWithoutQuery.fragment == nil)
+    #expect(value.resourceOrigins == ["https://res.wx.qq.com"])
+}
+
 // WKWebView cannot launch its content process in every command-line/sandbox test host. Release
 // qualification runs this explicitly from the signed feasibility harness instead of allowing the
 // default unit suite to hang when WebKit is unavailable.

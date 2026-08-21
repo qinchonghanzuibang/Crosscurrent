@@ -43,34 +43,57 @@ public actor TodayCoordinator {
         let ranked = RankingEngine.rank(snapshots.map { snapshot in
             let ageHours = max(0, now.timeIntervalSince(snapshot.aggregate.revision.endedAt ?? snapshot.aggregate.revision.startedAt ?? snapshot.aggregate.revision.createdAt) / 3_600)
             let coverage = min(1, Double(snapshot.independentSourceCount) / 8)
+            let followed = !snapshot.followedPeople.isEmpty || !snapshot.followedTopics.isEmpty || snapshot.hasFollowedSource
+            let updateMagnitude: Double = switch snapshot.aggregate.revision.changeKind {
+            case .initial, .majorUpdate, .correction: 1
+            case .contentUpdate, .merge, .split: 0.72
+            case .minorMetadata: 0.25
+            }
             return (
                 snapshot.aggregate.revision,
                 RankingSignals(
-                    importance: min(1, 0.45 + coverage * 0.55),
-                    personalRelevance: snapshot.followedPeople.isEmpty ? 0.35 : 0.95,
-                    novelty: snapshot.aggregate.revision.ordinal == 1 ? 0.9 : 0.65,
-                    authority: 0.8,
+                    importance: min(1, updateMagnitude * 0.55 + coverage * 0.45),
+                    personalRelevance: followed ? 1 : (snapshot.isSaved ? 0.8 : 0.15),
+                    novelty: updateMagnitude,
+                    authority: snapshot.primaryAuthority,
                     independentCoverage: coverage,
-                    velocity: max(0, 1 - ageHours / 48),
+                    velocity: snapshot.trendVelocity,
                     recency: max(0, 1 - ageHours / 96),
                     diversity: min(1, Double(snapshot.sourceCount) / 10),
                     followedEntity: !snapshot.followedPeople.isEmpty,
-                    followedSource: false,
-                    followedTopic: false,
-                    savedRelationship: false
+                    followedSource: snapshot.hasFollowedSource,
+                    followedTopic: !snapshot.followedTopics.isEmpty,
+                    savedRelationship: snapshot.isSaved
                 )
             )
         })
         let snapshotByRevision = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.aggregate.revision.id, $0) })
+        var assigned = Set<EventRevisionID>()
         var entries: [DigestEntry] = []
-        entries += entriesFor(Array(ranked.prefix(5)), section: .today)
-        entries += entriesFor(ranked.filter { value in
-            now.timeIntervalSince(value.revision.endedAt ?? value.revision.startedAt ?? value.revision.createdAt) < 21_600
-        }.prefix(8), section: .emerging)
-        entries += entriesFor(ranked.filter { !(snapshotByRevision[$0.revision.id]?.followedPeople.isEmpty ?? true) }.prefix(12), section: .peopleYouFollow)
-        entries += entriesFor(ranked.filter { $0.reasons.contains(.primarySource) }.prefix(12), section: .worthReading)
-        entries += entriesFor(ranked.filter { snapshotByRevision[$0.revision.id]?.chinaGlobalCoverageSufficient == true }.prefix(8), section: .chinaGlobal, adding: .chinaGlobalCoverage)
-        entries += entriesFor(ranked.dropFirst(5), section: .everythingElse)
+        func append(_ candidates: [RankedEvent], section: DigestSection, limit: Int, adding extraReason: RankingReason? = nil) {
+            guard entries.count < 15 else { return }
+            let available = min(limit, 15 - entries.count)
+            let selected = candidates.filter { !assigned.contains($0.revision.id) }.prefix(available)
+            for value in selected { assigned.insert(value.revision.id) }
+            entries += entriesFor(selected, section: section, adding: extraReason)
+        }
+
+        let hero = ranked.filter { value in
+            guard let snapshot = snapshotByRevision[value.revision.id] else { return false }
+            let age = now.timeIntervalSince(value.revision.endedAt ?? value.revision.startedAt ?? value.revision.createdAt)
+            return age <= 7 * 86_400 && (snapshot.primaryAuthority >= 0.8 || snapshot.independentSourceCount >= 2 || snapshot.hasFollowedSource || !snapshot.followedPeople.isEmpty || !snapshot.followedTopics.isEmpty)
+        }
+        append(hero, section: .today, limit: 5)
+        append(ranked.filter { value in
+            (snapshotByRevision[value.revision.id]?.trendVelocity ?? 0) > 0
+        }, section: .emerging, limit: 3)
+        append(ranked.filter {
+            guard let snapshot = snapshotByRevision[$0.revision.id] else { return false }
+            return !snapshot.followedPeople.isEmpty || snapshot.hasFollowedSource
+        }, section: .peopleYouFollow, limit: 3)
+        append(ranked.filter { (snapshotByRevision[$0.revision.id]?.readerText.count ?? 0) >= 1_200 }, section: .worthReading, limit: 3)
+        append(ranked.filter { snapshotByRevision[$0.revision.id]?.chinaGlobalCoverageSufficient == true }, section: .chinaGlobal, limit: 2, adding: .chinaGlobalCoverage)
+        append(ranked, section: .everythingElse, limit: 15)
 
         let digestID = stored?.digest.id ?? DigestID()
         let revision = DigestRevision(digestID: digestID, parentRevisionID: parent, reason: reason, createdAt: now, entries: entries)

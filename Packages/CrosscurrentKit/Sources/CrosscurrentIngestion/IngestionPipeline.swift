@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import NaturalLanguage
 import CrosscurrentConnectors
 import CrosscurrentBrowser
 import CrosscurrentDomain
@@ -22,10 +23,12 @@ public struct IngestionResult: Sendable {
 public actor IngestionPipeline {
     private let repository: CrosscurrentRepository
     private let blobStore: CanonicalBlobStore?
+    private let enrichment: ProviderFreeEnrichmentStage
 
     public init(repository: CrosscurrentRepository, blobStore: CanonicalBlobStore? = nil) {
         self.repository = repository
         self.blobStore = blobStore
+        enrichment = ProviderFreeEnrichmentStage(repository: repository)
     }
 
     public func ingest(candidate: ConnectorItemCandidate, sourceID: SourceID, endpointID: SourceEndpointID, fetchedAt: Date = .now) async throws -> IngestionResult {
@@ -70,7 +73,9 @@ public actor IngestionPipeline {
                 publishedAt: candidate.publishedAt,
                 modifiedAt: candidate.modifiedAt,
                 fetchedAt: fetchedAt,
-                languageCode: candidate.languageCode,
+                languageCode: candidate.languageCode ?? Self.detectLanguage(
+                    in: candidate.title + "\n" + normalizedText
+                ),
                 text: normalizedText,
                 sanitizedHTML: sanitizedHTML,
                 contentHash: contentHash,
@@ -91,6 +96,14 @@ public actor IngestionPipeline {
                 sanitizedHTMLBlobID: htmlBlob?.id,
                 idempotencyKey: "item:\(endpointID):\(candidate.externalID):\(contentHash)"
             )
+            if createdRevision {
+                try await enrichment.enrich(
+                    candidate: candidate,
+                    sourceID: sourceID,
+                    revision: value,
+                    segments: segments
+                )
+            }
             revision = value
         }
 
@@ -108,5 +121,21 @@ public actor IngestionPipeline {
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Connector language metadata wins when present. Otherwise persist the
+    /// system recognizer's provider-free result so bilingual retrieval,
+    /// deduplication, and qualification do not silently treat real feed Items as
+    /// language-unknown. Very short inputs remain unknown instead of being
+    /// assigned a brittle guess.
+    private static func detectLanguage(in value: String) -> String? {
+        let sample = String(value.prefix(8_000))
+        let meaningful = sample.unicodeScalars.filter {
+            CharacterSet.letters.contains($0) || (0x3400...0x9FFF).contains(Int($0.value))
+        }
+        guard meaningful.count >= 16 else { return nil }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(sample)
+        return recognizer.dominantLanguage?.rawValue
     }
 }

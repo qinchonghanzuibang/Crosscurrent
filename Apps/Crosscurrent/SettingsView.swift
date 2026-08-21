@@ -52,16 +52,62 @@ struct SettingsView: View {
                 Toggle("Allow configured cloud providers for public content", isOn: Binding(get: { model.publicCloudConsent }, set: { value in Task { await model.setPublicCloudConsent(value) } }))
                 GroupBox("Privacy boundary") { Text("Authenticated and public are independent. Private, restricted, and unknown content stays local unless an explicit compatible policy permits otherwise.").frame(maxWidth: .infinity, alignment: .leading).padding(6) }
                 LabeledContent("Reasoning provider", value: model.providerConfigured ? "Configured" : "Not configured")
-                Picker("Provider", selection: $providerKind) { Text("Ollama / local-compatible").tag("ollama"); Text("OpenAI Responses API").tag("openai") }
+                LabeledContent("Embedding route", value: "Development-selected · multilingual-e5-small / ORT CPU")
+                Text(model.embeddingStatus).font(.caption).foregroundStyle(.secondary)
+                Text("Semantic indexing activates only after the pinned model/runtime artifact manifest, checksums, license, and local runtime layout validate. Lexical search remains available without it.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Picker("Fast route", selection: Binding(get: { model.fastProviderID }, set: { value in Task { await model.setProviderRoute(.fast, providerID: value) } })) {
+                    Text("Automatic").tag(String?.none)
+                    ForEach(model.providerConfigurations.filter(\.enabled)) { configuration in
+                        Text(configuration.displayName).tag(Optional(configuration.id))
+                    }
+                }
+                Picker("Reasoning route", selection: Binding(get: { model.reasoningProviderID }, set: { value in Task { await model.setProviderRoute(.reasoning, providerID: value) } })) {
+                    Text("Automatic").tag(String?.none)
+                    ForEach(model.providerConfigurations.filter(\.enabled)) { configuration in
+                        Text(configuration.displayName).tag(Optional(configuration.id))
+                    }
+                }
+                ForEach(model.providerConfigurations) { configuration in
+                    VStack(alignment: .leading, spacing: 3) {
+                        LabeledContent(configuration.displayName, value: configuration.health.capitalized)
+                        if let checked = configuration.lastCheckedAt {
+                            Text("Last checked \(checked.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let error = configuration.lastError {
+                            Text(error).font(.caption).foregroundStyle(.red).lineLimit(2)
+                        }
+                    }
+                }
+                Picker("Provider", selection: $providerKind) {
+                    Text("Ollama").tag("ollama")
+                    Text("OpenAI Responses").tag("openai")
+                    Text("OpenAI-compatible Chat Completions").tag("openai-compatible")
+                    Text("Anthropic Messages").tag("anthropic")
+                    Text("Gemini generateContent").tag("gemini")
+                    Text("OpenRouter").tag("openrouter")
+                }
                     .onChange(of: providerKind) { _, value in
-                        if value == "openai" { providerEndpoint = "https://api.openai.com/v1/responses"; providerModel = "gpt-5-mini" }
-                        else { providerEndpoint = "http://127.0.0.1:11434/api/chat"; providerModel = "qwen3:4b" }
+                        switch value {
+                        case "openai": providerEndpoint = "https://api.openai.com/v1/responses"; providerModel = "gpt-5-mini"
+                        case "openai-compatible": providerEndpoint = "https://example.invalid/v1/chat/completions"; providerModel = "model-id"
+                        case "anthropic": providerEndpoint = "https://api.anthropic.com/v1/messages"; providerModel = "claude-sonnet-4-5"
+                        case "gemini": providerEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"; providerModel = "gemini-2.5-flash"
+                        case "openrouter": providerEndpoint = "https://openrouter.ai/api/v1/chat/completions"; providerModel = "openai/gpt-5-mini"
+                        default: providerEndpoint = "http://127.0.0.1:11434/api/chat"; providerModel = "qwen3:4b"
+                        }
                     }
                 TextField("Endpoint", text: $providerEndpoint)
                 TextField("Model", text: $providerModel)
-                SecureField(providerKind == "openai" ? "API key" : "Optional bearer token", text: $providerSecret)
-                Button("Save provider") {
-                    Task { providerStatus = await model.saveProvider(kind: providerKind, endpoint: providerEndpoint, model: providerModel, secret: providerSecret); providerSecret = "" }
+                SecureField(providerKind == "ollama" ? "Optional bearer token" : "API key", text: $providerSecret)
+                HStack {
+                    Button("Test connection") {
+                        Task { providerStatus = await model.testProvider(kind: providerKind, endpoint: providerEndpoint, model: providerModel, secret: providerSecret) }
+                    }
+                    Button("Save provider") {
+                        Task { providerStatus = await model.saveProvider(kind: providerKind, endpoint: providerEndpoint, model: providerModel, secret: providerSecret); providerSecret = "" }
+                    }
                 }
                 if !providerStatus.isEmpty { Text(providerStatus).font(.caption).foregroundStyle(.secondary) }
             }.padding().tabItem { Label("AI & Privacy", systemImage: "lock.shield") }.tag("AI")

@@ -128,6 +128,29 @@ import Testing
     #expect(try await repository.activeConsentRevision(providerID: "cloud", sourceID: sourceID, privacy: .public, task: .eventSynthesis) == nil)
 }
 
+@Test func providerHealthAndRetryStatePersistWithConfiguration() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentProviderHealthTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try CrosscurrentDatabase.open(at: DatabaseLocations(container: root), role: .mainApp)
+    let repository = CrosscurrentRepository(database: database, writerInstance: "provider-health-test")
+    let configuration = ProviderConfigurationRecord(
+        id: "local-fast",
+        kind: "ollama",
+        displayName: "Local fast",
+        keychainReference: nil,
+        configuration: Data("{}".utf8)
+    )
+    #expect(try await repository.saveProviderConfiguration(configuration))
+    let checked = Date(timeIntervalSince1970: 4_000)
+    let retry = checked.addingTimeInterval(300)
+    #expect(try await repository.recordProviderHealth(id: configuration.id, healthy: false, error: "Model unavailable", checkedAt: checked, retryAt: retry))
+    let stored = try #require(try await repository.providerConfigurations().first)
+    #expect(stored.health == "failed")
+    #expect(stored.lastCheckedAt == checked)
+    #expect(stored.lastError == "Model unavailable")
+    #expect(stored.retryAt == retry)
+}
+
 @Test func agentRefusesAnUninitializedSchema() throws {
     let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentAgentSchemaTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: root) }

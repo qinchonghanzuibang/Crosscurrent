@@ -178,6 +178,18 @@ public struct RawFetchReceipt: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public struct StoredRawFetchCache: Codable, Hashable, Sendable {
+    public var responseHeaders: [String: String]
+    public var blob: StoredBlob
+    public var finalURL: URL
+
+    public init(responseHeaders: [String: String], blob: StoredBlob, finalURL: URL) {
+        self.responseHeaders = responseHeaders
+        self.blob = blob
+        self.finalURL = finalURL
+    }
+}
+
 public struct StoredItemState: Codable, Hashable, Sendable {
     public var itemID: ItemID
     public var currentRevisionID: ItemRevisionID
@@ -189,6 +201,68 @@ public struct StoredItemState: Codable, Hashable, Sendable {
         self.currentRevisionID = currentRevisionID
         self.currentOrdinal = currentOrdinal
         self.currentContentHash = currentContentHash
+    }
+}
+
+/// Hash-bound normalized evidence exported by the local qualification command.
+/// It deliberately excludes full article bodies so tracked manifests can refer
+/// to exact revisions without copying copyrighted content.
+public struct QualificationEvidenceRecord: Codable, Hashable, Sendable {
+    public var sourceName: String
+    public var connector: ConnectorKind
+    public var canonicalURL: URL?
+    public var title: String
+    public var itemID: ItemID
+    public var itemRevisionID: ItemRevisionID
+    public var revisionOrdinal: Int
+    public var contentHash: String
+    public var segmentHashes: [String]
+
+    public init(sourceName: String, connector: ConnectorKind, canonicalURL: URL?, title: String, itemID: ItemID, itemRevisionID: ItemRevisionID, revisionOrdinal: Int, contentHash: String, segmentHashes: [String]) {
+        self.sourceName = sourceName
+        self.connector = connector
+        self.canonicalURL = canonicalURL
+        self.title = title
+        self.itemID = itemID
+        self.itemRevisionID = itemRevisionID
+        self.revisionOrdinal = revisionOrdinal
+        self.contentHash = contentHash
+        self.segmentHashes = segmentHashes
+    }
+}
+
+/// Full normalized evidence available only from the developer's gitignored
+/// qualification database. It is intentionally never emitted into the tracked
+/// URL/hash manifest.
+public struct QualificationEmbeddingRecord: Codable, Hashable, Sendable {
+    public struct Segment: Codable, Hashable, Sendable {
+        public var id: ItemSegmentID
+        public var hash: String
+        public var text: String
+
+        public init(id: ItemSegmentID, hash: String, text: String) {
+            self.id = id
+            self.hash = hash
+            self.text = text
+        }
+    }
+
+    public var itemRevisionID: ItemRevisionID
+    public var canonicalURL: URL?
+    public var title: String
+    public var text: String
+    public var languageCode: String?
+    public var contentHash: String
+    public var segments: [Segment]
+
+    public init(itemRevisionID: ItemRevisionID, canonicalURL: URL?, title: String, text: String, languageCode: String?, contentHash: String, segments: [Segment]) {
+        self.itemRevisionID = itemRevisionID
+        self.canonicalURL = canonicalURL
+        self.title = title
+        self.text = text
+        self.languageCode = languageCode
+        self.contentHash = contentHash
+        self.segments = segments
     }
 }
 
@@ -236,8 +310,13 @@ public struct PendingEvidenceSegment: Codable, Hashable, Sendable {
     public var sourceName: String
     public var canonicalURL: URL?
     public var accountID: ConnectorAccountID?
+    public var connector: ConnectorKind
+    public var isOfficialSource: Bool
+    public var entityIDs: Set<EntityID>
+    public var topicIDs: Set<TopicID>
+    public var independenceGroup: String
 
-    public init(itemID: ItemID, itemRevision: ItemRevision, segment: ItemSegment, sourceID: SourceID, sourceName: String, canonicalURL: URL?, accountID: ConnectorAccountID?) {
+    public init(itemID: ItemID, itemRevision: ItemRevision, segment: ItemSegment, sourceID: SourceID, sourceName: String, canonicalURL: URL?, accountID: ConnectorAccountID?, connector: ConnectorKind = .website, isOfficialSource: Bool = false, entityIDs: Set<EntityID> = [], topicIDs: Set<TopicID> = [], independenceGroup: String? = nil) {
         self.itemID = itemID
         self.itemRevision = itemRevision
         self.segment = segment
@@ -245,6 +324,55 @@ public struct PendingEvidenceSegment: Codable, Hashable, Sendable {
         self.sourceName = sourceName
         self.canonicalURL = canonicalURL
         self.accountID = accountID
+        self.connector = connector
+        self.isOfficialSource = isOfficialSource
+        self.entityIDs = entityIDs
+        self.topicIDs = topicIDs
+        self.independenceGroup = independenceGroup ?? sourceID.description
+    }
+}
+
+public struct StoredEntityAlias: Codable, Hashable, Sendable {
+    public var entityID: EntityID
+    public var kind: EntityKind
+    public var value: String
+    public var normalizedValue: String
+    public var confidence: Confidence
+
+    public init(entityID: EntityID, kind: EntityKind, value: String, normalizedValue: String, confidence: Confidence) {
+        self.entityID = entityID
+        self.kind = kind
+        self.value = value
+        self.normalizedValue = normalizedValue
+        self.confidence = confidence
+    }
+}
+
+public struct CurrentItemDeduplicationEvidence: Codable, Hashable, Sendable {
+    public var itemID: ItemID
+    public var revisionID: ItemRevisionID
+    public var sourceID: SourceID
+    public var externalID: String
+    public var canonicalURL: URL?
+    public var title: String
+    public var author: String?
+    public var text: String
+    public var contentHash: String
+    public var languageCode: String?
+    public var publishedAt: Date?
+
+    public init(itemID: ItemID, revisionID: ItemRevisionID, sourceID: SourceID, externalID: String, canonicalURL: URL?, title: String, author: String?, text: String, contentHash: String, languageCode: String?, publishedAt: Date?) {
+        self.itemID = itemID
+        self.revisionID = revisionID
+        self.sourceID = sourceID
+        self.externalID = externalID
+        self.canonicalURL = canonicalURL
+        self.title = title
+        self.author = author
+        self.text = text
+        self.contentHash = contentHash
+        self.languageCode = languageCode
+        self.publishedAt = publishedAt
     }
 }
 
@@ -260,6 +388,34 @@ public struct StoredEventAggregate: Codable, Hashable, Sendable {
     }
 }
 
+public struct StoredClusteringSignals: Codable, Hashable, Sendable {
+    public var entityIDs: Set<EntityID>
+    public var topicIDs: Set<TopicID>
+
+    public init(entityIDs: Set<EntityID> = [], topicIDs: Set<TopicID> = []) {
+        self.entityIDs = entityIDs
+        self.topicIDs = topicIDs
+    }
+}
+
+public struct StoredPrimarySourceSignals: Codable, Hashable, Sendable {
+    public var connector: ConnectorKind
+    public var isOfficialRelationship: Bool
+    public var canonicalURL: URL?
+    public var publishedAt: Date?
+    public var textLength: Int
+    public var provenance: AssertionProvenance
+
+    public init(connector: ConnectorKind, isOfficialRelationship: Bool, canonicalURL: URL?, publishedAt: Date?, textLength: Int, provenance: AssertionProvenance) {
+        self.connector = connector
+        self.isOfficialRelationship = isOfficialRelationship
+        self.canonicalURL = canonicalURL
+        self.publishedAt = publishedAt
+        self.textLength = textLength
+        self.provenance = provenance
+    }
+}
+
 /// Process-neutral projection consumed by the app shell. It keeps reader state and the exact
 /// primary ItemRevision while avoiding a dependency from storage onto presentation modules.
 public struct StoredEventSnapshot: Codable, Hashable, Sendable {
@@ -271,7 +427,12 @@ public struct StoredEventSnapshot: Codable, Hashable, Sendable {
     public var sourceCount: Int
     public var independentSourceCount: Int
     public var topics: [String]
+    public var followedTopics: [String]
     public var followedPeople: [String]
+    public var hasFollowedSource: Bool
+    public var isSaved: Bool
+    public var primaryAuthority: Double
+    public var trendVelocity: Double
     public var readerText: String
     public var readerHTML: String?
     public var originalURL: URL?
@@ -279,7 +440,7 @@ public struct StoredEventSnapshot: Codable, Hashable, Sendable {
     public var chinaGlobalCoverageSufficient: Bool
     public var readStatus: RevisionReadStatus
 
-    public init(aggregate: StoredEventAggregate, primaryItemRevisionID: ItemRevisionID, primarySourceID: SourceID, contentPrivacy: ContentPrivacy, primarySourceName: String, sourceCount: Int, independentSourceCount: Int, topics: [String], followedPeople: [String], readerText: String, readerHTML: String? = nil, originalURL: URL?, originalAccountID: ConnectorAccountID?, chinaGlobalCoverageSufficient: Bool, readStatus: RevisionReadStatus) {
+    public init(aggregate: StoredEventAggregate, primaryItemRevisionID: ItemRevisionID, primarySourceID: SourceID, contentPrivacy: ContentPrivacy, primarySourceName: String, sourceCount: Int, independentSourceCount: Int, topics: [String], followedTopics: [String] = [], followedPeople: [String], hasFollowedSource: Bool = false, isSaved: Bool = false, primaryAuthority: Double = 0.5, trendVelocity: Double = 0, readerText: String, readerHTML: String? = nil, originalURL: URL?, originalAccountID: ConnectorAccountID?, chinaGlobalCoverageSufficient: Bool, readStatus: RevisionReadStatus) {
         self.aggregate = aggregate
         self.primaryItemRevisionID = primaryItemRevisionID
         self.primarySourceID = primarySourceID
@@ -288,7 +449,12 @@ public struct StoredEventSnapshot: Codable, Hashable, Sendable {
         self.sourceCount = sourceCount
         self.independentSourceCount = independentSourceCount
         self.topics = topics
+        self.followedTopics = followedTopics
         self.followedPeople = followedPeople
+        self.hasFollowedSource = hasFollowedSource
+        self.isSaved = isSaved
+        self.primaryAuthority = primaryAuthority
+        self.trendVelocity = trendVelocity
         self.readerText = readerText
         self.readerHTML = readerHTML
         self.originalURL = originalURL
@@ -332,6 +498,19 @@ public struct StoredSearchDocument: Codable, Hashable, Sendable {
     }
 }
 
+public struct StoredItemDetail: Identifiable, Codable, Hashable, Sendable {
+    public var id: ItemID
+    public var revisionID: ItemRevisionID
+    public var title: String
+    public var author: String?
+    public var sourceName: String
+    public var text: String
+    public var canonicalURL: URL?
+    public var originalAccountID: ConnectorAccountID?
+    public var publishedAt: Date?
+    public var isHistorical: Bool
+}
+
 public struct ProviderConfigurationRecord: Identifiable, Codable, Hashable, Sendable {
     public var id: String
     public var kind: String
@@ -339,14 +518,22 @@ public struct ProviderConfigurationRecord: Identifiable, Codable, Hashable, Send
     public var keychainReference: Data?
     public var enabled: Bool
     public var configuration: Data
+    public var health: String
+    public var lastCheckedAt: Date?
+    public var lastError: String?
+    public var retryAt: Date?
 
-    public init(id: String, kind: String, displayName: String, keychainReference: Data?, enabled: Bool = true, configuration: Data) {
+    public init(id: String, kind: String, displayName: String, keychainReference: Data?, enabled: Bool = true, configuration: Data, health: String = "unknown", lastCheckedAt: Date? = nil, lastError: String? = nil, retryAt: Date? = nil) {
         self.id = id
         self.kind = kind
         self.displayName = displayName
         self.keychainReference = keychainReference
         self.enabled = enabled
         self.configuration = configuration
+        self.health = health
+        self.lastCheckedAt = lastCheckedAt
+        self.lastError = lastError
+        self.retryAt = retryAt
     }
 }
 
@@ -357,6 +544,37 @@ public struct StoredSourceSnapshot: Identifiable, Codable, Hashable, Sendable {
     public var endpoints: [SourceEndpoint]
     public var aiClassification: SourceAIClassification?
     public var coverage: SourceCoverageAssertion?
+}
+
+public struct StoredEndpointHealth: Identifiable, Codable, Hashable, Sendable {
+    public var id: SourceEndpointID { endpointID }
+    public var endpointID: SourceEndpointID
+    public var health: ConnectorHealth
+    public var lastSuccess: Date?
+    public var lastAttempt: Date?
+    public var lastFailure: Date?
+    public var lastFailureMessage: String?
+    public var nextRetry: Date?
+    public var cursorFamily: String?
+    public var itemCount: Int
+}
+
+public struct StoredSourceFolderSnapshot: Identifiable, Codable, Hashable, Sendable {
+    public var id: UUID
+    public var parentID: UUID?
+    public var name: String
+    public var attributes: [String: String]
+    public var sortOrder: Int
+    public var sourceIDs: [SourceID]
+
+    public init(id: UUID, parentID: UUID?, name: String, attributes: [String: String], sortOrder: Int, sourceIDs: [SourceID]) {
+        self.id = id
+        self.parentID = parentID
+        self.name = name
+        self.attributes = attributes
+        self.sortOrder = sortOrder
+        self.sourceIDs = sourceIDs
+    }
 }
 
 public struct StoredEntitySnapshot: Identifiable, Codable, Hashable, Sendable {
@@ -401,6 +619,42 @@ public struct StoredEventEvidence: Identifiable, Codable, Hashable, Sendable {
         self.confidence = confidence
         self.publishedAt = publishedAt
         self.isPrimary = isPrimary
+    }
+}
+
+public struct StoredCoverageEvidence: Identifiable, Codable, Hashable, Sendable {
+    public var id: MembershipAssertionID
+    public var ecosystem: CoverageEcosystem
+    public var independenceGroup: String
+    public var sourceName: String
+    public var title: String
+    public var excerpt: String
+    public var publishedAt: Date?
+    public var isPrimary: Bool
+
+    public init(id: MembershipAssertionID, ecosystem: CoverageEcosystem, independenceGroup: String, sourceName: String, title: String, excerpt: String, publishedAt: Date?, isPrimary: Bool) {
+        self.id = id
+        self.ecosystem = ecosystem
+        self.independenceGroup = independenceGroup
+        self.sourceName = sourceName
+        self.title = title
+        self.excerpt = excerpt
+        self.publishedAt = publishedAt
+        self.isPrimary = isPrimary
+    }
+}
+
+public struct StoredCoverageComparison: Codable, Hashable, Sendable {
+    public var chinaFocused: [StoredCoverageEvidence]
+    public var globalFocused: [StoredCoverageEvidence]
+
+    public init(chinaFocused: [StoredCoverageEvidence] = [], globalFocused: [StoredCoverageEvidence] = []) {
+        self.chinaFocused = chinaFocused
+        self.globalFocused = globalFocused
+    }
+
+    public var isQualified: Bool {
+        Set(chinaFocused.map(\.independenceGroup)).count >= 2 && Set(globalFocused.map(\.independenceGroup)).count >= 2
     }
 }
 
