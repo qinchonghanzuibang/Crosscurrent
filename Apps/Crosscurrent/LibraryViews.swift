@@ -36,6 +36,15 @@ struct SourcesView: View {
                 }
                 Button { model.presentsAddSource = true } label: { Image(systemName: "plus") }
             }.padding(24)
+            if !status.isEmpty {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 10)
+                    .textSelection(.enabled)
+            }
             if model.sources.isEmpty { ContentUnavailableView("No Sources", systemImage: "dot.radiowaves.left.and.right", description: Text("Add a feed, creator profile, repository, publication, or webpage.")) }
             else {
                 List(model.sources) { snapshot in

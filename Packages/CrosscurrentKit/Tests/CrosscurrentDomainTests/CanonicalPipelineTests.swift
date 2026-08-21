@@ -12,6 +12,9 @@ private struct DiscoveryHTTPClient: ConnectorHTTPClient {
     let feedURL = URL(string: "https://example.com/feed.xml")!
 
     func get(_ url: URL, headers _: [String: String]) async throws -> ConnectorHTTPResponse {
+        if url.path == "/unsupported" {
+            throw ConnectorError.invalidResponse("not a feed")
+        }
         let xml = """
         <?xml version="1.0"?><rss version="2.0"><channel><title>Real Preview</title><link>https://example.com</link><description>Preview only</description>
         <item><guid>preview-1</guid><title>Preview Item</title><link>https://example.com/item</link><description>Evidence sample</description></item>
@@ -48,7 +51,9 @@ func sourceDiscoveryPreviewDoesNotPersistUntilExplicitCommit() async throws {
     #expect(try await repository.sourceSnapshots().isEmpty)
 
     _ = try await discovery.commit(preview, action: .subscribe)
-    #expect(try await repository.sourceSnapshots().count == 1)
+    let sources = try await repository.sourceSnapshots()
+    #expect(sources.count == 1)
+    #expect(sources.first?.revision.displayName == "Real Preview")
     #expect(try await repository.qualificationEvidenceRecords().count == 1)
 }
 
@@ -243,6 +248,47 @@ func opmlExportPreservesFoldersAndRedactsSecretLikeAttributes() async throws {
     #expect(!xml.contains("must-not-export"))
     let outlines = try OPMLParser().parse(data: data)
     #expect(outlines.first?.children.first?.title == "Exported Source")
+}
+
+@Test
+func repeatedOPMLImportReusesFeedIdentityAndRoundTripsHierarchy() async throws {
+    let (repository, _) = try makeRepository()
+    let http = DiscoveryHTTPClient()
+    let registry = ConnectorRegistry()
+    await registry.register(FeedConnector(http: http))
+    let discovery = SourceDiscoveryService(repository: repository, connectors: registry, http: http)
+    let importer = OPMLImportService(repository: repository, discovery: discovery)
+    let opml = """
+    <opml version="2.0"><head><title>Crosscurrent Qualification</title></head><body>
+      <outline text="People" title="People">
+        <outline text="Lilian Weng — Lil'Log" title="Lilian Weng — Lil'Log" type="rss"
+          xmlUrl="https://example.com/feed.xml" htmlUrl="https://example.com/" />
+        <outline text="Unsupported sibling" title="Unsupported sibling" type="rss"
+          xmlUrl="https://example.com/unsupported" />
+      </outline>
+    </body></opml>
+    """
+
+    _ = try OPMLParser().parse(data: Data(opml.utf8))
+    let first = try await importer.importData(Data(opml.utf8))
+    let second = try await importer.importData(Data(opml.utf8))
+    #expect(first.sourceCount == 1)
+    #expect(second.sourceCount == 1)
+    #expect(first.failures.count == 1)
+    #expect(second.failures.count == 1)
+    #expect(first.entries.count == 2)
+    #expect(first.entries.contains { $0.title == "Unsupported sibling" && !$0.succeeded })
+    let sources = try await repository.sourceSnapshots()
+    #expect(sources.count == 1)
+    #expect(sources.first?.revision.displayName == "Lilian Weng — Lil'Log")
+    let people = try #require(try await repository.sourceFolderSnapshots().first { $0.name == "People" })
+    #expect(people.sourceIDs.count == 1)
+
+    let exported = try await OPMLExportService(repository: repository).exportData()
+    let outlines = try OPMLParser().parse(data: exported)
+    #expect(outlines.first?.title == "People")
+    #expect(outlines.first?.children.count == 1)
+    #expect(outlines.first?.children.first?.feedURL == http.feedURL)
 }
 
 @Test

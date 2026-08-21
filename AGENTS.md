@@ -20,6 +20,11 @@
 - User clustering constraints are durable hard constraints until revoked.
 - Default search indexes current revisions. Historical search is explicit.
 - Embedding runtime, model, dimensions, and dtype remain dynamic.
+- Reader fidelity is a core product requirement. Preserve useful semantic article
+  structure, math, code, tables, safe media, figures, captions, and links while
+  removing executable content; never flatten usable technical structure to plain
+  text. Qualify with real content and visual inspection, then add only focused
+  regressions for failures found.
 - Keep dependencies permissively licensed. Do not copy or link GPL/AGPL
   PaperRss or RSSHub implementation code.
 - Keep repository documentation minimal; put stable engineering rules here.

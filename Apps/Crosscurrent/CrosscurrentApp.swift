@@ -938,11 +938,15 @@ final class AppModel: ObservableObject {
             let data = try Data(contentsOf: url)
             let result = try await OPMLImportService(repository: repository, discovery: discoveryService)
                 .importData(data, context: ConnectorContext(allowsUserInteraction: true))
-            try await reloadCanonicalLibrary()
-            if result.failures.isEmpty {
-                return String(localized: "Imported \(result.sourceCount) Sources in \(result.folderCount) folders.")
+            for endpointID in result.entries.flatMap(\.endpointIDs) {
+                try await foregroundRefresh(endpointID: endpointID)
             }
-            return String(localized: "Imported \(result.sourceCount) Sources; \(result.failures.count) entries need attention.")
+            try await reloadCanonicalLibrary()
+            let summary = result.failures.isEmpty
+                ? String(localized: "Imported \(result.sourceCount) Sources in \(result.folderCount) folders.")
+                : String(localized: "Imported \(result.sourceCount) Sources; \(result.failures.count) entries need attention.")
+            let details = result.entries.map { "\($0.succeeded ? "✓" : "⚠") \($0.title): \($0.message)" }
+            return ([summary] + details).joined(separator: "\n")
         } catch {
             startupError = error.localizedDescription
             return error.localizedDescription

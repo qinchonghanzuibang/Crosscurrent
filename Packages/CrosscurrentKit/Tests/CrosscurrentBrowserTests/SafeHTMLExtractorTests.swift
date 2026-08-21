@@ -43,7 +43,7 @@ func sanitizerPreservesSafeSVGAndMathMLWithoutExecutableSubtrees() throws {
         <use href="javascript:alert(3)"/>
       </svg>
       <math display="block"><mfrac><mi>x</mi><mn>2</mn></mfrac></math>
-      <img src="https://tracker.invalid/pixel" onerror="alert(4)">
+      <img src="http://127.0.0.1/pixel" onerror="alert(4)">
     </article>
     """
     let output = try StaticHTMLPreprocessor.conservativeSanitize(source).sanitizedHTML.lowercased()
@@ -55,8 +55,63 @@ func sanitizerPreservesSafeSVGAndMathMLWithoutExecutableSubtrees() throws {
     #expect(!output.contains("onerror"))
     #expect(!output.contains("foreignobject"))
     #expect(!output.contains("<use"))
-    #expect(!output.contains("tracker.invalid"))
+    #expect(!output.contains("127.0.0.1"))
     #expect(!output.contains("javascript:"))
+}
+
+@Test
+func sanitizerResolvesRealArticleMediaAndLinksWithoutKeepingLazyAttributes() throws {
+    let source = """
+    <article>
+      <figure>
+        <img src="placeholder.gif" data-src="images/diagram.png" srcset="images/small.png 1x, images/large.png 2x" style="width: 60%" alt="System diagram">
+        <figcaption>Overview of the system.</figcaption>
+      </figure>
+      <a href="#details">Details</a>
+    </article>
+    """
+    let baseURL = try #require(URL(string: "https://example.com/posts/article/"))
+    let output = try StaticHTMLPreprocessor.conservativeSanitize(source, baseURL: baseURL).sanitizedHTML
+    #expect(output.contains("src=\"https://example.com/posts/article/images/diagram.png\""))
+    #expect(output.contains("width=\"60%\""))
+    #expect(output.contains("<figure>"))
+    #expect(output.contains("<figcaption>"))
+    #expect(output.contains("Overview of the system."))
+    #expect(output.contains("href=\"https://example.com/posts/article/#details\""))
+    #expect(!output.contains("data-src"))
+    #expect(!output.contains("srcset"))
+}
+
+@Test
+func texScriptsBecomeInertDelimitersAndReaderProducesMathML() async throws {
+    let source = """
+    <article><p>Inline <script type="math/tex">x^2</script>.</p>
+    <script type="math/tex; mode=display">\\frac{a}{b}</script></article>
+    """
+    let inert = try StaticHTMLPreprocessor.inertDocument(from: source, baseURL: URL(string: "https://example.com/article"))
+    #expect(!inert.lowercased().contains("<script"))
+    #expect(inert.contains("\\(x^2\\)"))
+    #expect(inert.contains("\\[\\frac{a}{b}\\]"))
+
+    let sanitized = try StaticHTMLPreprocessor.conservativeSanitize(inert).sanitizedHTML
+    let rendered = await ReaderHTMLPreparer.prepare(sanitized)
+    #expect(rendered.contains("<math"))
+    #expect(rendered.contains("<msup"))
+    #expect(rendered.contains("<mfrac"))
+    #expect(!rendered.contains("\\(x^2\\)"))
+    #expect(!rendered.lowercased().contains("<script"))
+}
+
+@Test
+func readerRendersEveryFormulaInARealWorldParagraph() async {
+    let source = #"""
+    <p>Assume the feedback tuples are ranked by reward, $r_n \geq r_{n-1} \geq \dots \geq r_1$ The process uses $\tau_h = (x, z_i, y_i)$, where $\leq i \leq j \leq n$.</p>
+    """#
+    let rendered = await ReaderHTMLPreparer.prepare(source)
+    #expect(rendered.components(separatedBy: "<math").count == 4)
+    #expect(!rendered.contains("$r_n"))
+    #expect(!rendered.contains("$\\tau_h"))
+    #expect(!rendered.contains("$\\leq"))
 }
 
 @Test func authenticatedPlatformCaptureFixturesAreVersionedAndSecretRedacted() throws {
