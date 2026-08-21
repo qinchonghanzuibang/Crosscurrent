@@ -34,12 +34,36 @@ private struct QualificationEnvironment: Codable {
     var operatingSystem: String
 }
 
+private struct CasebookManifest: Codable {
+    var version: Int
+    var evidenceRevisionBindings: [CasebookBinding]
+}
+
+private struct CasebookBinding: Codable {
+    var id: String
+    var url: URL
+    var revisionID: String
+    var contentHash: String
+}
+
+private struct CasebookBindingStatus: Codable {
+    enum Status: String, Codable { case exactFrozenRevision, sameContentNewRevision, contentDiverged, missing }
+    var id: String
+    var url: URL
+    var expectedRevisionID: String
+    var expectedContentHash: String
+    var actualRevisionID: String?
+    var actualContentHash: String?
+    var status: Status
+}
+
 private struct QualificationResult: Codable {
     var manifestVersion: Int
     var frozenAt: Date
     var environment: QualificationEnvironment
     var sources: [SourceRun]
     var evidence: [QualificationEvidenceRecord]
+    var casebookBindings: [CasebookBindingStatus]
 }
 
 private actor UnavailableBrowser: BrowserCreatorSessionClient {
@@ -59,6 +83,9 @@ private struct CrosscurrentQualificationCommand {
         let cacheRoot = argument("--cache").map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? root.appending(path: ".crosscurrent-qualification", directoryHint: .isDirectory)
         let manifest = try JSONDecoder().decode(QualificationManifest.self, from: Data(contentsOf: manifestURL))
+        let casebookURL = argument("--casebook").map { URL(fileURLWithPath: $0) }
+            ?? root.appending(path: "Qualification/casebook.v1.json")
+        let casebook = try JSONDecoder().decode(CasebookManifest.self, from: Data(contentsOf: casebookURL))
 
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -83,7 +110,7 @@ private struct CrosscurrentQualificationCommand {
                 var importedItems = committed.importedItems
                 if action != .importOnce {
                     for endpointID in committed.endpointIDs {
-                        let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpointID, maximumPages: 1))
+                        let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpointID, maximumPages: 1, maximumItems: source.maximumSamples))
                         let job = DurableJob(kind: CrosscurrentJobKind.refresh, inputHash: endpointID.description, idempotencyKey: "qualification-refresh:\(source.id):\(endpointID)", payload: payload)
                         _ = try await repository.enqueue(job)
                         if let (leased, lease) = try await repository.leaseJob(id: job.id, owner: "qualification", duration: 300) {
@@ -104,12 +131,14 @@ private struct CrosscurrentQualificationCommand {
         let index = try DerivedIndexCoordinator(repository: repository, directory: locations.derivedSearch)
         _ = try await index.synchronize()
 
+        let evidence = try await repository.qualificationEvidenceRecords()
         let result = QualificationResult(
             manifestVersion: manifest.version,
             frozenAt: .now,
             environment: environment(),
             sources: sourceRuns,
-            evidence: try await repository.qualificationEvidenceRecords()
+            evidence: evidence,
+            casebookBindings: bindingStatuses(casebook.evidenceRevisionBindings, evidence: evidence)
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -117,6 +146,31 @@ private struct CrosscurrentQualificationCommand {
         let resultURL = runRoot.appending(path: "qualification-result.json")
         try encoder.encode(result).write(to: resultURL, options: .atomic)
         print(resultURL.path)
+    }
+
+    private static func bindingStatuses(_ bindings: [CasebookBinding], evidence: [QualificationEvidenceRecord]) -> [CasebookBindingStatus] {
+        bindings.map { binding in
+            let current = evidence.first { $0.canonicalURL == binding.url }
+            let status: CasebookBindingStatus.Status
+            if let current, current.itemRevisionID.description == binding.revisionID, current.contentHash == binding.contentHash {
+                status = .exactFrozenRevision
+            } else if current?.contentHash == binding.contentHash {
+                status = .sameContentNewRevision
+            } else if current != nil {
+                status = .contentDiverged
+            } else {
+                status = .missing
+            }
+            return CasebookBindingStatus(
+                id: binding.id,
+                url: binding.url,
+                expectedRevisionID: binding.revisionID,
+                expectedContentHash: binding.contentHash,
+                actualRevisionID: current?.itemRevisionID.description,
+                actualContentHash: current?.contentHash,
+                status: status
+            )
+        }
     }
 
     private static func argument(_ name: String) -> String? {

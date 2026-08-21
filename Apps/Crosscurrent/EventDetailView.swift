@@ -11,6 +11,7 @@ struct EventDetailView: View {
     @State private var choosingMergeTarget = false
     @State private var evidence: [StoredEventEvidence] = []
     @State private var history: [StoredEventRevisionSummary] = []
+    @State private var coverage = StoredCoverageComparison()
 
     private var event: EventCardModel? { model.events.first { $0.id == model.selectedEventID } }
 
@@ -37,8 +38,10 @@ struct EventDetailView: View {
             .task(id: event.id) {
                 async let loadedEvidence = model.evidence(for: event.id)
                 async let loadedHistory = model.revisionHistory(for: event.id)
+                async let loadedCoverage = model.coverageComparison(for: event.id)
                 evidence = await loadedEvidence
                 history = await loadedHistory
+                coverage = await loadedCoverage
             }
             .toolbar {
                 ToolbarItemGroup {
@@ -169,12 +172,41 @@ struct EventDetailView: View {
                         EvidenceRow(source: assertion.sourceName, title: assertion.title, text: assertion.excerpt, metadata: evidenceMetadata(assertion))
                     }
                 }
-                if event.reasons.contains(.chinaGlobalCoverage) {
-                    SectionRule("China ↔ Global")
-                    Text("Shown only because the stored coverage assertions meet the two-independent-groups-per-ecosystem threshold. Language and nationality are not used as proxies.")
+                SectionRule("Coverage Comparison", trailing: coverage.isQualified ? String(localized: "Evidence-qualified") : String(localized: "More classified evidence needed"))
+                HStack(alignment: .top, spacing: 16) {
+                    coverageColumn("China-focused", evidence: coverage.chinaFocused)
+                    coverageColumn("Global-focused", evidence: coverage.globalFocused)
                 }
+                Text("This provider-free comparison shows classified independent Sources, timing, primary evidence, and factual evidence excerpts. It does not infer framing, sentiment, motive, language, or nationality.")
+                    .font(.caption).foregroundStyle(.secondary)
+                SectionRule("Perspective Synthesis")
+                Text("Configure a policy-permitted reasoning provider to synthesize framing or emphasis differences with citations. Crosscurrent does not generate a pseudo-semantic narrative without one.")
+                    .foregroundStyle(.secondary)
             }.padding(28).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
         }
+    }
+
+    private func coverageColumn(_ title: LocalizedStringKey, evidence: [StoredCoverageEvidence]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.headline)
+            Text("\(Set(evidence.map(\.independenceGroup)).count) independent Sources · \(evidence.count) evidence spans")
+                .font(.caption).foregroundStyle(.secondary)
+            if evidence.isEmpty {
+                Text("No classified evidence").foregroundStyle(.tertiary)
+            } else {
+                ForEach(evidence.prefix(4)) { item in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack { Text(item.sourceName).font(.subheadline.bold()); if item.isPrimary { StatusPill("Primary") } }
+                        Text(item.title).font(.caption).lineLimit(2)
+                        Text(item.excerpt).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                        if let date = item.publishedAt { Text(date, style: .relative).font(.caption2).foregroundStyle(.tertiary) }
+                    }
+                    .padding(10)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private func evidenceMetadata(_ assertion: StoredEventEvidence) -> String {

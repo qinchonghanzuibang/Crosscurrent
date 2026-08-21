@@ -36,9 +36,10 @@ public struct EventRevision: Identifiable, Codable, Hashable, Sendable {
     public var endedAt: Date?
     public var changeKind: RevisionChangeKind
     public var primaryMembershipAssertionID: MembershipAssertionID?
+    public var primaryReasonTrace: [String]
     public var createdAt: Date
 
-    public init(id: EventRevisionID = EventRevisionID(), eventID: EventID, ordinal: Int = 1, title: String, summary: String, startedAt: Date? = nil, endedAt: Date? = nil, changeKind: RevisionChangeKind = .initial, primaryMembershipAssertionID: MembershipAssertionID? = nil, createdAt: Date = .now) {
+    public init(id: EventRevisionID = EventRevisionID(), eventID: EventID, ordinal: Int = 1, title: String, summary: String, startedAt: Date? = nil, endedAt: Date? = nil, changeKind: RevisionChangeKind = .initial, primaryMembershipAssertionID: MembershipAssertionID? = nil, primaryReasonTrace: [String] = [], createdAt: Date = .now) {
         self.id = id
         self.eventID = eventID
         self.ordinal = ordinal
@@ -48,6 +49,7 @@ public struct EventRevision: Identifiable, Codable, Hashable, Sendable {
         self.endedAt = endedAt
         self.changeKind = changeKind
         self.primaryMembershipAssertionID = primaryMembershipAssertionID
+        self.primaryReasonTrace = primaryReasonTrace
         self.createdAt = createdAt
     }
 }

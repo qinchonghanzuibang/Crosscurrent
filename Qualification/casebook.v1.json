@@ -1,21 +1,85 @@
 {
   "version": 1,
-  "evidenceRevisionBindings": [],
-  "duplicateJudgments": [],
-  "eventMembershipJudgments": [],
-  "searchJudgments": [],
+  "frozenRun": "2026-08-21T07-06-53Z",
+  "evidenceRevisionBindings": [
+    {"id":"swift-android","source":"Swift.org","url":"https://swift.org/blog/exploring-the-swift-sdk-for-android","revisionID":"000fb8ad-b1e8-4067-ba36-c622c264fa9b","contentHash":"85769219e36471b7c2c5cc7ab7227c299c3263ae07135969da4c9da6b8ef1b83"},
+    {"id":"swift-december","source":"Swift.org","url":"https://swift.org/blog/whats-new-in-swift-december-2025","revisionID":"bb720e96-262d-465d-a379-df20d666dc1c","contentHash":"91a9381149674521f9c6d32b73d0b6ad134fcd446dde4be7694860bbc8034872"},
+    {"id":"webkit-250","source":"WebKit","url":"https://webkit.org/blog/18191/release-notes-for-safari-technology-preview-250","revisionID":"5b8a618b-38bd-48d7-9674-40c727d8bf4c","contentHash":"2628b7bc20c2fbab769054a7708da335b9ef2d581de5e191ecf52fdd887f9ef2"},
+    {"id":"webkit-249","source":"WebKit","url":"https://webkit.org/blog/18182/release-notes-for-safari-technology-preview-249","revisionID":"130261f7-1dce-4174-8d4a-dc0bd98df4ab","contentHash":"35534ad8aeabaa0562fa2b3991f72ee784228cb3f38c2db846910dd1f84bc169"},
+    {"id":"cloudflare-oauth","source":"Cloudflare Blog","url":"https://blog.cloudflare.com/task-based-oauth-consent","revisionID":"84c2149b-a883-4045-9417-490dfb808a52","contentHash":"4460645b83cf198142370297f3c50f3fdba19e0f18bfd2e532197f999575df8b"},
+    {"id":"cloudflare-spectre","source":"Cloudflare Blog","url":"https://blog.cloudflare.com/revisiting-spectre-attacks-on-workers","revisionID":"0d709268-fe76-4d4e-acfb-40e3e09ec224","contentHash":"54d052e2568c3239503b060f03170fe4d4420226e94119826a15cce4bebfa33c"},
+    {"id":"mozilla-pact","source":"Mozilla Hacks","url":"https://hacks.mozilla.org/2026/06/pact-anonymous-credentials-for-the-web","revisionID":"ea42da14-ee04-4dd6-bb7c-da5c6c50cf92","contentHash":"71af853d1f483d0eeb9a7e0e1dd78424378b3f1bb27e09a5a74184721e4b6498"},
+    {"id":"mozilla-serial","source":"Mozilla Hacks","url":"https://hacks.mozilla.org/2026/05/web-serial-support-in-firefox","revisionID":"d30d3b95-4708-407f-985f-bf4431c2f266","contentHash":"4275149d4e578811ccfc1cfd781360189adef9543d33c3651c17e6961e3b4ec6"},
+    {"id":"hf-dspark","source":"Hugging Face","url":"https://huggingface.co/blog/LiquidAI/lfm25-dspark","revisionID":"b7fc11db-4adb-4285-9a65-bb1b72e70806","contentHash":"9cccc0df2bd50d311b4b759003ae0e2fc3162e6ed0e2981d30e5cad81af24d70"},
+    {"id":"hf-agent-memory","source":"Hugging Face","url":"https://huggingface.co/blog/ibm-research/altk-evolve-hmm","revisionID":"161c423e-1159-466a-9836-cb6fe2897549","contentHash":"07a38aea3176ebd1d96a54e33552eafefc749851958be2851483587bcb7e71f4"},
+    {"id":"arxiv-conceptguard","source":"arXiv cs.CL","url":"https://arxiv.org/abs/2608.20338v1","revisionID":"0a85980b-395a-4f5a-a337-60b866af71a6","contentHash":"4145b00f2922f9d9e9fca012def6c685af351611731135752d6c024f177f4112"},
+    {"id":"arxiv-gcarl","source":"arXiv cs.CL","url":"https://arxiv.org/abs/2608.20331v1","revisionID":"4200dbb7-4c3d-4e3d-9db6-7e277bd6a17d","contentHash":"6d3cd04f6875b818e1a97c45e0510ee96d6e4c81562985d29ffe305d0a72de81"},
+    {"id":"arxiv-third-restructuring","source":"arXiv cs.SE","url":"https://arxiv.org/abs/2608.20201v1","revisionID":"f988a4a0-c792-480d-b239-88216c905963","contentHash":"783c3454c63223f2f49f9d9cb6553edbce0e4e7d02841a3f7167cf1f94ceddd7"},
+    {"id":"arxiv-agent-docs","source":"arXiv cs.SE","url":"https://arxiv.org/abs/2608.20195v1","revisionID":"6849249f-795f-489d-a9ed-d4d68d1858a7","contentHash":"cad2214fe05336e9525147d036a372fa92302c98c8ece215062cbe1acee7ebd3"},
+    {"id":"meituan-longcat","source":"美团技术团队","url":"https://tech.meituan.com/2026/06/30/LongCat2.0.html","revisionID":"78948309-0a46-479c-98b5-22bb5d12f458","contentHash":"e52a58850584d13f989a5a777e38e63fb793606d60bafd25b3877fad4e2352a6"},
+    {"id":"meituan-icml","source":"美团技术团队","url":"https://tech.meituan.com/2026/06/29/ICML-2026.html","revisionID":"cd1b0e02-09e0-4d5a-a111-9544f7d79755","contentHash":"3dde2df3b8d098b69e132d893321f0b9976ea05dccd2f903a4d25c272e4c9daa"},
+    {"id":"ruan-409","source":"阮一峰的网络日志","url":"http://www.ruanyifeng.com/blog/2026/08/weekly-issue-409.html","revisionID":"0f428fe3-072b-4018-ba53-7a86096cccf6","contentHash":"fdf3b1a1f73c54ec55e78aba8d3111aca3e3d76cf16b6c3932872b8e01f9a9ea"},
+    {"id":"ruan-408","source":"阮一峰的网络日志","url":"http://www.ruanyifeng.com/blog/2026/08/weekly-issue-408.html","revisionID":"537222b0-f6c1-477f-b114-bbfd43b9a693","contentHash":"b4df163eba3939742ff2b38f13234413f7e0e46d25c02f00ffce58b934f8a8c4"},
+    {"id":"solidot-solar-birds","source":"Solidot","url":"https://www.solidot.org/story?sid=85152","revisionID":"e8979e4a-c7ca-4e36-9602-bb52dac28424","contentHash":"3b57949f9eb51ed5421b038b40d73e1b739eafe70ecbd3ef3957295bdfda0c3d"},
+    {"id":"hn-ai-jobs","source":"Hacker News","url":"https://www.pewresearch.org/short-reads/2026/08/18/young-adults-in-the-us-are-increasingly-wary-of-ai-concerned-it-will-take-jobs","revisionID":"a1e78872-a751-42ae-b31e-85755291b568","contentHash":"41b3aca19144ce9567e2797e47c0cec7eda85c31583b488f9423c38ef75a5a38"}
+  ],
+  "duplicateJudgments": [
+    {"left":"webkit-249","right":"webkit-250","expected":"unrelated","note":"successive releases are hard negatives"},
+    {"left":"arxiv-conceptguard","right":"arxiv-gcarl","expected":"unrelated","note":"same category and date, different papers"},
+    {"left":"arxiv-third-restructuring","right":"arxiv-agent-docs","expected":"unrelated","note":"same software-agents vocabulary, distinct research"},
+    {"left":"ruan-408","right":"ruan-409","expected":"unrelated","note":"weekly roundups are distinct Events"},
+    {"left":"cloudflare-oauth","right":"cloudflare-spectre","expected":"unrelated","note":"same publisher, unrelated announcements"}
+  ],
+  "eventMembershipJudgments": [
+    {"event":"webkit-250","members":["webkit-250"],"expectedPrimary":"webkit-250"},
+    {"event":"arxiv-conceptguard","members":["arxiv-conceptguard"],"expectedPrimary":"arxiv-conceptguard"},
+    {"event":"meituan-longcat","members":["meituan-longcat"],"expectedPrimary":"meituan-longcat"},
+    {"event":"mozilla-pact","members":["mozilla-pact"],"expectedPrimary":"mozilla-pact"}
+  ],
+  "searchJudgments": [
+    {"query":"Safari Technology Preview 250","expectedHigh":["webkit-250"]},
+    {"query":"匿名凭证 Web","expectedHigh":["mozilla-pact"]},
+    {"query":"AI 缓存","expectedHigh":["ruan-408"]},
+    {"query":"context sensitive unlearning","expectedHigh":["arxiv-conceptguard"]},
+    {"query":"国产算力 万亿参数模型","expectedHigh":["meituan-longcat"]},
+    {"query":"task based OAuth consent","expectedHigh":["cloudflare-oauth"]}
+  ],
   "rankingProfiles": [
     {
-      "id": "developer-systems",
-      "followedSourceIDs": ["swift-blog", "webkit", "mozilla-hacks", "swift-repository", "swift-transformers"],
-      "followedTopics": ["Swift", "WebKit", "browser engineering", "local AI tooling"],
-      "eventJudgments": []
+      "id":"developer-systems",
+      "followedSourceIDs":["swift-blog","webkit","mozilla-hacks","swift-repository","swift-transformers"],
+      "followedTopics":["Swift","WebKit","browser engineering","local AI tooling"],
+      "eventJudgments":[
+        {"event":"webkit-250","relevance":"high","top":"five"},
+        {"event":"swift-android","relevance":"high","top":"five"},
+        {"event":"mozilla-serial","relevance":"high","top":"ten"},
+        {"event":"mozilla-pact","relevance":"high","top":"ten"},
+        {"event":"cloudflare-spectre","relevance":"neutral","top":"ten"},
+        {"event":"solidot-solar-birds","relevance":"low","top":"none"},
+        {"event":"hn-ai-jobs","relevance":"low","top":"none"}
+      ],
+      "orderingConstraints":[
+        {"higher":"webkit-250","lower":"solidot-solar-birds"},
+        {"higher":"swift-android","lower":"hn-ai-jobs"}
+      ]
     },
     {
-      "id": "cross-ecosystem-ai",
-      "followedSourceIDs": ["hugging-face", "deepseek-news", "arxiv-cl", "ruanyifeng", "solidot"],
-      "followedTopics": ["model releases", "multilingual research", "local inference"],
-      "eventJudgments": []
+      "id":"cross-ecosystem-ai",
+      "followedSourceIDs":["hugging-face","deepseek-news","arxiv-cl","ruanyifeng","solidot","meituan-tech"],
+      "followedTopics":["model releases","multilingual research","local inference"],
+      "eventJudgments":[
+        {"event":"hf-dspark","relevance":"high","top":"five"},
+        {"event":"meituan-longcat","relevance":"high","top":"five"},
+        {"event":"arxiv-conceptguard","relevance":"high","top":"ten"},
+        {"event":"arxiv-third-restructuring","relevance":"high","top":"ten"},
+        {"event":"ruan-408","relevance":"high","top":"ten"},
+        {"event":"webkit-249","relevance":"low","top":"none"},
+        {"event":"mozilla-serial","relevance":"low","top":"none"}
+      ],
+      "orderingConstraints":[
+        {"higher":"meituan-longcat","lower":"webkit-249"},
+        {"higher":"hf-dspark","lower":"mozilla-serial"}
+      ]
     }
   ]
 }

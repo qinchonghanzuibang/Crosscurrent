@@ -444,9 +444,9 @@ public actor CrosscurrentRepository {
                 INSERT OR IGNORE INTO event_revisions
                   (id, event_id, ordinal, title, summary, started_at, ended_at, change_kind,
                    primary_membership_assertion_id, score_snapshot_json, generation_metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 """,
-                arguments: [revision.id.description, event.id.description, revision.ordinal, revision.title, revision.summary, revision.startedAt?.timeIntervalSince1970, revision.endedAt?.timeIntervalSince1970, revision.changeKind.rawValue, revision.primaryMembershipAssertionID?.description, revision.createdAt.timeIntervalSince1970]
+                arguments: [revision.id.description, event.id.description, revision.ordinal, revision.title, revision.summary, revision.startedAt?.timeIntervalSince1970, revision.endedAt?.timeIntervalSince1970, revision.changeKind.rawValue, revision.primaryMembershipAssertionID?.description, try encoder.encode(revision.primaryReasonTrace), revision.createdAt.timeIntervalSince1970]
             )
             let included = includedMembershipIDs ?? Set(memberships.map(\.id))
             for membershipID in included {
@@ -609,6 +609,40 @@ public actor CrosscurrentRepository {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [receipt.id.uuidString.lowercased(), receipt.endpointID?.description, safeRequest.safeURL.absoluteString, requestMetadata, responseMetadata, receipt.statusCode, receipt.responseSHA256, receipt.blobID?.description, receipt.fetchedAt.timeIntervalSince1970, receipt.retentionClass.rawValue, receipt.extractionOutcome]
+            )
+        }
+    }
+
+    public func latestRawFetchCache(for url: URL) throws -> StoredRawFetchCache? {
+        let safeURL = HTTPMetadataRedactor.redact(url: url, headers: [:]).safeURL.absoluteString
+        return try database.pool.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT r.safe_url, r.redacted_response_metadata, b.*
+                FROM raw_fetches r JOIN blobs b ON b.id=r.blob_id
+                WHERE r.safe_url=? AND r.status_code BETWEEN 200 AND 299
+                ORDER BY r.fetched_at DESC LIMIT 1
+                """,
+                arguments: [safeURL]
+            ), let blobID = Self.identifier(BlobID.self, row["id"]),
+               let retention = BlobRetentionClass(rawValue: row["retention_class"]),
+               let finalURL = URL(string: row["safe_url"])
+            else { return nil }
+            let metadata: Data? = row["redacted_response_metadata"]
+            let headers = try metadata.map { try decoder.decode([String: String].self, from: $0) } ?? [:]
+            return StoredRawFetchCache(
+                responseHeaders: headers,
+                blob: StoredBlob(
+                    id: blobID,
+                    sha256: row["sha256"],
+                    relativePath: row["relative_path"],
+                    byteCount: row["byte_count"],
+                    mediaType: row["media_type"],
+                    retentionClass: retention,
+                    createdAt: Date(timeIntervalSince1970: row["created_at"])
+                ),
+                finalURL: finalURL
             )
         }
     }
@@ -1073,7 +1107,13 @@ public actor CrosscurrentRepository {
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                SELECT i.id AS item_id, i.source_id, i.canonical_key, ep.account_id,
+                SELECT i.id AS item_id, i.source_id, i.canonical_key, ep.account_id, ep.connector_kind,
+                       EXISTS(
+                         SELECT 1 FROM source_entities se
+                         WHERE se.source_id=i.source_id
+                           AND se.role IN ('represents','publishedBy','officialFor')
+                           AND se.confidence >= 0.8
+                       ) AS source_is_official,
                        ir.id AS revision_id, ir.ordinal AS revision_ordinal, ir.title, ir.author,
                        ir.published_at, ir.modified_at, ir.fetched_at, ir.language_code,
                        ir.plain_text, ir.content_hash AS revision_hash, ir.revision_reason,
@@ -1142,6 +1182,8 @@ public actor CrosscurrentRepository {
                     sourceName: row["source_name"],
                     canonicalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
                     accountID: Self.identifier(ConnectorAccountID.self, row["account_id"] as String?),
+                    connector: ConnectorKind(rawValue: row["connector_kind"]) ?? .website,
+                    isOfficialSource: row["source_is_official"],
                     entityIDs: Set(try String.fetchAll(db, sql: "SELECT DISTINCT entity_id FROM item_entity_mentions WHERE item_revision_id=? AND item_segment_id=?", arguments: [revisionID.description, segmentID.description]).compactMap { Self.identifier(EntityID.self, $0) }),
                     topicIDs: Set(try String.fetchAll(db, sql: "SELECT DISTINCT topic_id FROM item_topic_assertions WHERE item_revision_id=? AND (item_segment_id IS NULL OR item_segment_id=?)", arguments: [revisionID.description, segmentID.description]).compactMap { Self.identifier(TopicID.self, $0) }),
                     independenceGroup: try String.fetchOne(db, sql: "SELECT group_id FROM duplicate_group_members WHERE item_id=? LIMIT 1", arguments: [itemID.description]) ?? sourceID.description
@@ -1199,6 +1241,89 @@ public actor CrosscurrentRepository {
             return StoredClusteringSignals(
                 entityIDs: Set(entityValues.compactMap { Self.identifier(EntityID.self, $0) }),
                 topicIDs: Set(topicValues.compactMap { Self.identifier(TopicID.self, $0) })
+            )
+        }
+    }
+
+    public func primarySourceSignals(membershipID: MembershipAssertionID) throws -> StoredPrimarySourceSignals? {
+        try database.pool.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT ep.connector_kind, i.canonical_key, ir.published_at, LENGTH(ir.plain_text) AS text_length,
+                       ema.provenance,
+                       EXISTS(
+                         SELECT 1 FROM source_entities se
+                         WHERE se.source_id=i.source_id
+                           AND se.role IN ('represents','publishedBy','officialFor')
+                           AND se.confidence >= 0.8
+                       ) AS is_official
+                FROM event_membership_assertions ema
+                JOIN item_revisions ir ON ir.id=ema.item_revision_id
+                JOIN items i ON i.id=ir.item_id
+                JOIN source_endpoints ep ON ep.id=i.endpoint_id
+                WHERE ema.id=?
+                """,
+                arguments: [membershipID.description]
+            ), let connector = ConnectorKind(rawValue: row["connector_kind"]),
+               let provenance = AssertionProvenance(rawValue: row["provenance"])
+            else { return nil }
+            let canonical: String = row["canonical_key"]
+            return StoredPrimarySourceSignals(
+                connector: connector,
+                isOfficialRelationship: row["is_official"],
+                canonicalURL: URL(string: canonical),
+                publishedAt: (row["published_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                textLength: row["text_length"],
+                provenance: provenance
+            )
+        }
+    }
+
+    public func coverageComparison(eventID: EventID) throws -> StoredCoverageComparison {
+        try database.pool.read { db in
+            guard let currentRevision: String = try String.fetchOne(db, sql: "SELECT current_revision_id FROM events WHERE id=?", arguments: [eventID.description]) else {
+                return StoredCoverageComparison()
+            }
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT ema.id, ema.independence_group, ca.ecosystem, sr.display_name,
+                       ir.title, ir.published_at, seg.text,
+                       CASE WHEN er.primary_membership_assertion_id=ema.id THEN 1 ELSE 0 END AS is_primary
+                FROM event_revision_memberships erm
+                JOIN event_revisions er ON er.id=erm.event_revision_id
+                JOIN event_membership_assertions ema ON ema.id=erm.membership_assertion_id
+                JOIN item_revisions ir ON ir.id=ema.item_revision_id
+                JOIN item_segments seg ON seg.id=ema.item_segment_id
+                JOIN items i ON i.id=ir.item_id
+                JOIN sources s ON s.id=i.source_id
+                JOIN source_revisions sr ON sr.id=s.current_revision_id
+                JOIN source_coverage_assertions ca ON ca.source_id=i.source_id AND ca.is_current=1
+                WHERE erm.event_revision_id=? AND ca.ecosystem IN ('chinaFocused','globalFocused')
+                ORDER BY ca.ecosystem, COALESCE(ir.published_at, ir.fetched_at), sr.display_name
+                """,
+                arguments: [currentRevision]
+            )
+            let evidence = try rows.map { row -> StoredCoverageEvidence in
+                guard let id = Self.identifier(MembershipAssertionID.self, row["id"]),
+                      let ecosystem = CoverageEcosystem(rawValue: row["ecosystem"])
+                else { throw CrosscurrentStorageError.corruptRecord("CoverageComparison") }
+                let excerpt: String = row["text"]
+                return StoredCoverageEvidence(
+                    id: id,
+                    ecosystem: ecosystem,
+                    independenceGroup: (row["independence_group"] as String?) ?? row["display_name"],
+                    sourceName: row["display_name"],
+                    title: row["title"],
+                    excerpt: String(excerpt.prefix(360)),
+                    publishedAt: (row["published_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                    isPrimary: row["is_primary"]
+                )
+            }
+            return StoredCoverageComparison(
+                chinaFocused: evidence.filter { $0.ecosystem == .chinaFocused },
+                globalFocused: evidence.filter { $0.ecosystem == .globalFocused }
             )
         }
     }
@@ -1266,6 +1391,16 @@ public actor CrosscurrentRepository {
                     """,
                     arguments: [revision.id.description]
                 )
+                let followedTopics = try String.fetchAll(
+                    db,
+                    sql: """
+                    SELECT DISTINCT tr.name FROM event_topic_assertions a
+                    JOIN topics t ON t.id=a.topic_id AND t.is_followed=1
+                    JOIN topic_revisions tr ON tr.id=t.current_revision_id
+                    WHERE a.event_revision_id=? ORDER BY tr.name
+                    """,
+                    arguments: [revision.id.description]
+                )
                 let people = try String.fetchAll(
                     db,
                     sql: """
@@ -1293,6 +1428,35 @@ public actor CrosscurrentRepository {
                     arguments: [revision.id.description]
                 )
                 let coverageCounts = Dictionary(uniqueKeysWithValues: coverageRows.map { ($0["ecosystem"] as String, $0["group_count"] as Int) })
+                let hasFollowedSource = try Bool.fetchOne(
+                    db,
+                    sql: """
+                    SELECT EXISTS(
+                      SELECT 1 FROM event_revision_memberships rm
+                      JOIN event_membership_assertions m ON m.id=rm.membership_assertion_id
+                      JOIN item_revisions ir ON ir.id=m.item_revision_id
+                      JOIN items i ON i.id=ir.item_id JOIN sources s ON s.id=i.source_id
+                      WHERE rm.event_revision_id=? AND s.is_followed=1
+                    )
+                    """,
+                    arguments: [revision.id.description]
+                ) ?? false
+                let isSaved = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM saved_entries WHERE target_kind='event' AND target_id=?)", arguments: [eventID.description]) ?? false
+                let velocityRow = try Row.fetchOne(
+                    db,
+                    sql: """
+                    SELECT COUNT(DISTINCT CASE WHEN COALESCE(ir.published_at, ir.fetched_at) >= ? THEN COALESCE(m.independence_group, i.source_id) END) AS recent_groups,
+                           COUNT(DISTINCT CASE WHEN COALESCE(ir.published_at, ir.fetched_at) < ? THEN COALESCE(m.independence_group, i.source_id) END) AS prior_groups
+                    FROM event_revision_memberships rm
+                    JOIN event_membership_assertions m ON m.id=rm.membership_assertion_id
+                    JOIN item_revisions ir ON ir.id=m.item_revision_id JOIN items i ON i.id=ir.item_id
+                    WHERE rm.event_revision_id=?
+                    """,
+                    arguments: [Date.now.addingTimeInterval(-86_400).timeIntervalSince1970, Date.now.addingTimeInterval(-86_400).timeIntervalSince1970, revision.id.description]
+                )
+                let recentGroups: Int = velocityRow?["recent_groups"] ?? 0
+                let priorGroups: Int = velocityRow?["prior_groups"] ?? 0
+                let trendVelocity = recentGroups >= 2 ? min(1, Double(recentGroups) / max(2, Double(priorGroups) / 7)) : 0
                 let readRow = try Row.fetchOne(db, sql: "SELECT * FROM event_read_states WHERE event_id=?", arguments: [eventID.description])
                 let readState = EventReadState(
                     lastSeenRevisionID: Self.identifier(EventRevisionID.self, readRow?["last_seen_event_revision_id"] as String?),
@@ -1327,7 +1491,12 @@ public actor CrosscurrentRepository {
                     sourceCount: counts?["source_count"] ?? 0,
                     independentSourceCount: counts?["independent_count"] ?? 0,
                     topics: topicNames,
+                    followedTopics: followedTopics,
                     followedPeople: people,
+                    hasFollowedSource: hasFollowedSource,
+                    isSaved: isSaved,
+                    primaryAuthority: revision.primaryReasonTrace.contains(where: { $0.contains("first-party") || $0.contains("official repository") || $0.contains("paper record") }) ? 1 : 0.65,
+                    trendVelocity: trendVelocity,
                     readerText: primary["plain_text"],
                     readerHTML: readerHTML,
                     originalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
@@ -1526,6 +1695,31 @@ public actor CrosscurrentRepository {
         }
     }
 
+    public func sourceFolderSnapshots() throws -> [StoredSourceFolderSnapshot] {
+        try database.pool.read { db in
+            try Row.fetchAll(db, sql: "SELECT * FROM source_folders ORDER BY sort_order, name").map { row in
+                guard let id = UUID(uuidString: row["id"]) else {
+                    throw CrosscurrentStorageError.corruptRecord("SourceFolder")
+                }
+                let data: Data? = row["attributes_json"]
+                let attributes = try data.map { try decoder.decode([String: String].self, from: $0) } ?? [:]
+                let sourceValues = try String.fetchAll(
+                    db,
+                    sql: "SELECT source_id FROM source_folder_memberships WHERE folder_id=? ORDER BY sort_order, source_id",
+                    arguments: [id.uuidString.lowercased()]
+                )
+                return StoredSourceFolderSnapshot(
+                    id: id,
+                    parentID: (row["parent_id"] as String?).flatMap(UUID.init(uuidString:)),
+                    name: row["name"],
+                    attributes: attributes,
+                    sortOrder: row["sort_order"],
+                    sourceIDs: sourceValues.compactMap { Self.identifier(SourceID.self, $0) }
+                )
+            }
+        }
+    }
+
     public func entitySnapshots() throws -> [StoredEntitySnapshot] {
         try database.pool.read { db in
             try Row.fetchAll(db, sql: "SELECT e.*, r.id AS revision_id, r.display_name, r.summary, r.created_at AS revision_created_at FROM entities e JOIN entity_revisions r ON r.id=e.current_revision_id ORDER BY r.display_name").map { row in
@@ -1642,7 +1836,7 @@ public actor CrosscurrentRepository {
                 db,
                 sql: """
                 SELECT i.id AS item_id, i.canonical_key, i.current_revision_id,
-                       r.ordinal, r.content_hash, sr.display_name, e.connector_kind
+                       r.ordinal, r.title, r.content_hash, sr.display_name, e.connector_kind
                 FROM items i
                 JOIN item_revisions r ON r.id=i.current_revision_id
                 JOIN source_revisions sr ON sr.id=(SELECT current_revision_id FROM sources WHERE id=i.source_id)
@@ -1666,6 +1860,7 @@ public actor CrosscurrentRepository {
                     sourceName: row["display_name"],
                     connector: connector,
                     canonicalURL: URL(string: canonical),
+                    title: row["title"],
                     itemID: itemID,
                     itemRevisionID: revisionID,
                     revisionOrdinal: row["ordinal"],
@@ -1909,6 +2104,8 @@ public actor CrosscurrentRepository {
             let eventID = identifier(EventID.self, row["event_id"]),
             let changeKind = RevisionChangeKind(rawValue: row["change_kind"])
         else { throw CrosscurrentStorageError.corruptRecord("EventRevision") }
+        let metadata: Data? = row["generation_metadata_json"]
+        let primaryReasonTrace: [String] = metadata.flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
         return EventRevision(
             id: id,
             eventID: eventID,
@@ -1919,6 +2116,7 @@ public actor CrosscurrentRepository {
             endedAt: (row["ended_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
             changeKind: changeKind,
             primaryMembershipAssertionID: identifier(MembershipAssertionID.self, row["primary_membership_assertion_id"] as String?),
+            primaryReasonTrace: primaryReasonTrace,
             createdAt: Date(timeIntervalSince1970: row["created_at"])
         )
     }

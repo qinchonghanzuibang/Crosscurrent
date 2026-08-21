@@ -38,7 +38,7 @@ public struct URLSessionConnectorHTTPClient: ConnectorHTTPClient {
             let retry = http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
             throw ConnectorError.rateLimited(retryAfter: retry)
         }
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200..<300).contains(http.statusCode) || http.statusCode == 304 else {
             throw ConnectorError.invalidResponse("HTTP \(http.statusCode)")
         }
         let responseHeaders = http.allHeaderFields.reduce(into: [String: String]()) { output, pair in

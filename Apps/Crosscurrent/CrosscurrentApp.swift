@@ -520,6 +520,11 @@ final class AppModel: ObservableObject {
         catch { startupError = error.localizedDescription; return [] }
     }
 
+    func coverageComparison(for eventID: EventID) async -> StoredCoverageComparison {
+        do { return try await repository?.coverageComparison(eventID: eventID) ?? StoredCoverageComparison() }
+        catch { startupError = error.localizedDescription; return StoredCoverageComparison() }
+    }
+
     func search(_ text: String, kinds: Set<SearchDocumentKind>, includeHistory: Bool) async -> [SearchResult] {
         guard let searchStore else { return [] }
         do {
@@ -594,6 +599,11 @@ final class AppModel: ObservableObject {
             startupError = error.localizedDescription
             return error.localizedDescription
         }
+    }
+
+    func exportOPML() async throws -> Data {
+        guard let repository else { throw CocoaError(.fileNoSuchFile) }
+        return try await OPMLExportService(repository: repository).exportData()
     }
 
     func saveDailyBriefing(_ date: Date) async {

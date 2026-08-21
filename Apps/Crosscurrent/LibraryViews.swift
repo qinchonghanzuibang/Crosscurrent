@@ -13,6 +13,8 @@ struct SourcesView: View {
     @State private var status = ""
     @State private var selectedAction: SourceDiscoveryAction = .subscribe
     @State private var importingOPML = false
+    @State private var exportingOPML = false
+    @State private var exportDocument = OPMLExportDocument(data: Data())
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -22,6 +24,14 @@ struct SourcesView: View {
                 }
                 Spacer()
                 Button("Import OPML…", systemImage: "square.and.arrow.down") { importingOPML = true }
+                Button("Export OPML…", systemImage: "square.and.arrow.up") {
+                    Task {
+                        do {
+                            exportDocument = OPMLExportDocument(data: try await model.exportOPML())
+                            exportingOPML = true
+                        } catch { status = error.localizedDescription }
+                    }
+                }
                 Button { adding = true } label: { Image(systemName: "plus") }
             }.padding(24)
             if model.sources.isEmpty { ContentUnavailableView("No Sources", systemImage: "dot.radiowaves.left.and.right", description: Text("Add a feed, creator profile, repository, publication, or webpage.")) }
@@ -114,7 +124,19 @@ struct SourcesView: View {
             }
             Task { status = await model.importOPML(from: selected) }
         }
+        .fileExporter(isPresented: $exportingOPML, document: exportDocument, contentType: .xml, defaultFilename: "Crosscurrent Sources.opml") { result in
+            if case let .failure(error) = result { status = error.localizedDescription }
+        }
     }
+}
+
+private struct OPMLExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.xml] }
+    var data: Data
+
+    init(data: Data) { self.data = data }
+    init(configuration: ReadConfiguration) throws { data = configuration.file.regularFileContents ?? Data() }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
 }
 
 private extension SourceDiscoveryAction {
