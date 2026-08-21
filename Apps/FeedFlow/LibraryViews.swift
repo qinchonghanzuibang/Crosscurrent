@@ -1,0 +1,172 @@
+import FeedFlowDesignSystem
+import FeedFlowDomain
+import FeedFlowModels
+import FeedFlowStorage
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct SourcesView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var adding = false
+    @State private var url = ""
+    @State private var status = ""
+    @State private var importingOPML = false
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("Sources").font(.largeTitle.bold())
+                    Text("Logical Sources with connector endpoints").foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Import OPML…", systemImage: "square.and.arrow.down") { importingOPML = true }
+                Button { adding = true } label: { Image(systemName: "plus") }
+            }.padding(24)
+            if model.sources.isEmpty { ContentUnavailableView("No Sources", systemImage: "dot.radiowaves.left.and.right", description: Text("Add a feed, creator profile, repository, publication, or webpage.")) }
+            else {
+                List(model.sources) { snapshot in
+                    HStack(spacing: 14) {
+                        SourceMonogram(snapshot.revision.displayName, size: 34)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(snapshot.revision.displayName).font(.headline)
+                            Text("\(snapshot.source.kind.displayName) · \(snapshot.endpoints.map { $0.connector.rawValue }.joined(separator: " · "))").font(.caption).foregroundStyle(.secondary)
+                            HStack {
+                                if let policy = snapshot.aiClassification { StatusPill("\(policy.accessRequirement.displayName) · \(policy.contentPrivacy.displayName)", color: .secondary) }
+                                StatusPill(snapshot.coverage?.ecosystem.displayName ?? CoverageEcosystem.unknown.displayName, color: .secondary)
+                            }
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 8) {
+                            StatusPill(snapshot.endpoints.first?.health.displayName ?? String(localized: "No endpoint"), color: snapshot.endpoints.allSatisfy { $0.health == .healthy } ? .green : .orange)
+                            HStack(spacing: 8) {
+                                Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh(snapshot) } }
+                                    .labelStyle(.iconOnly)
+                                    .help("Refresh Source")
+                                if let endpoint = snapshot.endpoints.first(where: { $0.health == .authenticationRequired || $0.health == .platformChanged }) {
+                                    Button("Reconnect") { Task { await model.reconnect(endpoint) } }
+                                }
+                                Menu(snapshot.coverage?.ecosystem.displayName ?? String(localized: "Unknown coverage")) {
+                                    ForEach(CoverageEcosystem.allCases, id: \.self) { ecosystem in
+                                        Button(ecosystem.displayName) { model.setCoverage(snapshot, ecosystem: ecosystem) }
+                                    }
+                                }
+                                Button(snapshot.source.isFollowed ? "Following" : "Follow") { model.setSourceFollowed(snapshot, followed: !snapshot.source.isFollowed) }
+                            }.controlSize(.small)
+                        }
+                    }
+                }.listStyle(.inset)
+            }
+        }
+        .sheet(isPresented: $adding) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Add Source").font(.title.bold())
+                TextField("Feed, creator, repository, or webpage URL", text: $url).textFieldStyle(.roundedBorder)
+                Text("WeChat Official Accounts and Xiaohongshu creators use the authenticated BrowserWorker; URL capture remains supplementary.").font(.caption).foregroundStyle(.secondary)
+                if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary) }
+                HStack { Spacer(); Button("Cancel") { adding = false }; Button("Add and Refresh") { Task { status = await model.addSource(url); if status == String(localized: "Source added and refreshed.") { adding = false; url = "" } } }.keyboardShortcut(.defaultAction).disabled(url.isEmpty) }
+            }.padding(24).frame(width: 560)
+        }
+        .fileImporter(isPresented: $importingOPML, allowedContentTypes: [.xml, .data], allowsMultipleSelection: false) { result in
+            guard case let .success(urls) = result, let selected = urls.first else {
+                if case let .failure(error) = result { status = error.localizedDescription }
+                return
+            }
+            Task { status = await model.importOPML(from: selected) }
+        }
+    }
+}
+
+private extension ConnectorHealth {
+    var displayName: String {
+        switch self {
+        case .healthy: String(localized: "Healthy")
+        case .syncing: String(localized: "Syncing")
+        case .authenticationRequired: String(localized: "Authentication required")
+        case .rateLimited: String(localized: "Rate limited")
+        case .temporarilyUnavailable: String(localized: "Temporarily unavailable")
+        case .platformChanged: String(localized: "Platform changed")
+        case .error: String(localized: "Error")
+        case .disabled: String(localized: "Disabled")
+        }
+    }
+}
+
+struct PeopleView: View {
+    @EnvironmentObject private var model: AppModel
+    var body: some View { VStack(spacing: 0) { title("People", subtitle: "Entities, aliases, and all linked Sources"); if model.people.isEmpty { ContentUnavailableView("No People Yet", systemImage: "person.2") } else { List(model.people) { value in PersonRow(name: value.revision.displayName, aliases: value.aliases.map(\.value).joined(separator: " · "), endpoints: value.sourceNames.joined(separator: ", "), followed: value.entity.isFollowed) { model.setEntityFollowed(value, followed: !value.entity.isFollowed) } }.listStyle(.inset) } } }
+}
+
+private struct PersonRow: View { var name: String; var aliases: String; var endpoints: String; var followed: Bool; var action: () -> Void; var body: some View { HStack { SourceMonogram(name, size: 38); VStack(alignment: .leading) { Text(name).font(.headline); if !aliases.isEmpty { Text(aliases).font(.caption).foregroundStyle(.secondary) }; if !endpoints.isEmpty { Text(endpoints).font(.caption).foregroundStyle(.secondary) } }; Spacer(); Button(followed ? "Following" : "Follow", action: action) } } }
+
+struct TopicsView: View { @EnvironmentObject private var model: AppModel; var body: some View { VStack(spacing: 0) { title("Topics", subtitle: "Revisioned assertions from Items and Events"); if model.topics.isEmpty { ContentUnavailableView("No Topics Yet", systemImage: "number") } else { List(model.topics) { topic in HStack { Text("#").foregroundStyle(FeedFlowColor.accent); Text(topic.revision.name).font(.headline); Spacer(); Text(String.localizedStringWithFormat(String(localized: "%lld Events"), topic.eventCount)).foregroundStyle(.secondary); Button(topic.topic.isFollowed ? "Following" : "Follow") { model.setTopicFollowed(topic, followed: !topic.topic.isFollowed) } } } } } } }
+
+struct SavedView: View {
+    @EnvironmentObject private var model: AppModel
+    private var savedEvents: [EventCardModel] { model.events.filter { model.savedEventIDs.contains($0.id) } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            title("Saved", subtitle: "Articles, Events, tags, and smart collections")
+            if savedEvents.isEmpty {
+                ContentUnavailableView("Nothing Saved", systemImage: "bookmark", description: Text("Save an Event from Flow or Event Detail. Saved references follow the stable Event while preserving revision history."))
+            } else {
+                List(savedEvents) { event in
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "bookmark.fill").foregroundStyle(FeedFlowColor.accent)
+                        Button { model.open(event) } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(event.title).font(.headline).foregroundStyle(.primary)
+                                Text(event.primarySource + " · " + String.localizedStringWithFormat(String(localized: "%lld sources"), event.sourceCount)).font(.caption).foregroundStyle(.secondary)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        Button("Remove") { model.toggleSaved(event) }.buttonStyle(.borderless)
+                    }
+                }.listStyle(.inset)
+            }
+        }
+    }
+}
+
+@MainActor private func title(_ value: String, subtitle: String, add: (() -> Void)? = nil) -> some View { HStack { VStack(alignment: .leading) { Text(LocalizedStringKey(value)).font(.largeTitle.bold()); Text(LocalizedStringKey(subtitle)).foregroundStyle(.secondary) }; Spacer(); if let add { Button(action: add) { Image(systemName: "plus") } } }.padding(24) }
+
+private extension SourceKind {
+    var displayName: String {
+        switch self {
+        case .person: String(localized: "Person")
+        case .organization: String(localized: "Organization")
+        case .publication: String(localized: "Publication")
+        case .repository: String(localized: "Repository")
+        case .community: String(localized: "Community")
+        case .query: String(localized: "Query")
+        case .website: String(localized: "Website")
+        case .newsletter: String(localized: "Newsletter")
+        }
+    }
+}
+
+private extension AccessRequirement {
+    var displayName: String { self == .anonymous ? String(localized: "Anonymous") : String(localized: "Authenticated") }
+}
+
+private extension ContentPrivacy {
+    var displayName: String {
+        switch self {
+        case .public: String(localized: "Public")
+        case .private: String(localized: "Private")
+        case .restricted: String(localized: "Restricted")
+        case .unknown: String(localized: "Unknown")
+        }
+    }
+}
+
+private extension CoverageEcosystem {
+    var displayName: String {
+        switch self {
+        case .chinaFocused: String(localized: "China-focused")
+        case .globalFocused: String(localized: "Global-focused")
+        case .mixed: String(localized: "Mixed coverage")
+        case .unknown: String(localized: "Unknown coverage")
+        }
+    }
+}
