@@ -1,10 +1,10 @@
-# FeedFlow implementation rules
+# Crosscurrent implementation rules
 
 - Preserve the invariant: Item is evidence; Event is interpretation.
 - Never replace revisioned Event membership with a mutable `item.eventID`.
 - Historical Item, Event, Digest, Claim, membership, prompt, and provenance
   revisions are immutable.
-- Foreground FeedFlow must remain fully writable when FeedFlowAgent is absent.
+- Foreground Crosscurrent must remain fully writable when CrosscurrentAgent is absent.
 - Only the main app runs schema migrations. Agent waits on incompatible schema.
 - Every canonical writer uses shared short transactions, durable leases, and
   transactional change generations.

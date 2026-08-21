@@ -1,4 +1,4 @@
-FeedFlow third-party notices
+Crosscurrent third-party notices
 ============================
 
 This source tree pins the following shipped dependencies. Release automation

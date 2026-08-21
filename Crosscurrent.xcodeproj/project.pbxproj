@@ -1,0 +1,1283 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		092F9210750CB078FAEF0A5D /* CrosscurrentIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 4E36FF658E8113FDAB505E63 /* CrosscurrentIntelligence */; };
+		141CF06A163B0DC2BAAD8CCA /* CrosscurrentUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB8660C54F40EBF25C10619D /* CrosscurrentUITests.swift */; };
+		1CAC03C4AE4017C9C4EC7CED /* FlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1EC027581EDD97CF140AE11 /* FlowView.swift */; };
+		246D1835F305ADC1F4E58477 /* EventDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64945D1269BE0DCA8C9ED616 /* EventDetailView.swift */; };
+		31A0C1623C139EEE1BD4F675 /* CrosscurrentRanking in Frameworks */ = {isa = PBXBuildFile; productRef = 83FEB083D310CD5F59C820AA /* CrosscurrentRanking */; };
+		423AF7CF97B768330C6DA60D /* CrosscurrentBrowser in Frameworks */ = {isa = PBXBuildFile; productRef = FBE626A77EAA2EC6AEC9BF99 /* CrosscurrentBrowser */; };
+		445FBC648E642CEAB8F79933 /* CrosscurrentConnectors in Frameworks */ = {isa = PBXBuildFile; productRef = C0169C1DCB43C5BFC5B92012 /* CrosscurrentConnectors */; };
+		465758B9EC4605D68A408D94 /* CrosscurrentIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = B85DF01AD8862ED260A5B029 /* CrosscurrentIntelligence */; };
+		4B3CB210A2307A5187B7919D /* ShareExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1963D6247F302A9D3FD528 /* ShareExtensionHandler.swift */; };
+		4DC9D5B2DEFDE0F1C0AC6F1C /* CrosscurrentStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 9A3D3359063168F938FE7994 /* CrosscurrentStorage */; };
+		4E3CFD158F7B6B73697B21F1 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A38EBCE4EECCBC13594D3045 /* Sparkle */; };
+		57864CFF309A91EDB5DC7632 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 9929BD1FB50B41990BF29A11 /* Localizable.strings */; };
+		589057F6C4B9A1B1B5BA99B5 /* CrosscurrentSearch in Frameworks */ = {isa = PBXBuildFile; productRef = B9CC7B2EF77847C47C7C37CB /* CrosscurrentSearch */; };
+		5DD31BAB8942A5CA4A67FA22 /* CrosscurrentDomain in Frameworks */ = {isa = PBXBuildFile; productRef = DE0AB5E8071261D4C00037DF /* CrosscurrentDomain */; };
+		67581BB7BEEB19647BF8389E /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E92D9A64B58B55103E28BC8 /* TodayView.swift */; };
+		6A5E313B29D05733F84B6F78 /* CrosscurrentDesignSystem in Frameworks */ = {isa = PBXBuildFile; productRef = 4F5EA216F27AE9625DA183FC /* CrosscurrentDesignSystem */; };
+		761E3647F470ED7E2A8F9CA0 /* CrosscurrentSearch in Frameworks */ = {isa = PBXBuildFile; productRef = A9E3851A85F5D6E48735890A /* CrosscurrentSearch */; };
+		779303FA69D90F14060DB0F5 /* LibraryViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B84E6BF2D01F8C9AAAE994F /* LibraryViews.swift */; };
+		7B7030C3A57B2685611A3E77 /* AgentMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 984A802A36BBC846162B74EE /* AgentMain.swift */; };
+		811E34A28B48A1996FFF76F1 /* CrosscurrentModels in Frameworks */ = {isa = PBXBuildFile; productRef = F9B6F7726F69C397217FECD4 /* CrosscurrentModels */; };
+		82105E26EB6E835CCF86E058 /* CrosscurrentStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 6D9CDA256892BDACE14A7371 /* CrosscurrentStorage */; };
+		8368DBCAE68BF224F0FF008F /* CrosscurrentBrowserWorker.app in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = C9B7C06EE432979C88476A53 /* CrosscurrentBrowserWorker.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		8DFC5D12A3290C7D11AA902A /* CrosscurrentConnectors in Frameworks */ = {isa = PBXBuildFile; productRef = 9B95D584A6CBA6553723DF57 /* CrosscurrentConnectors */; };
+		933195DDF4F84D659F352688 /* CrosscurrentBrowser in Frameworks */ = {isa = PBXBuildFile; productRef = 5A536CC490F12EC6B42B860E /* CrosscurrentBrowser */; };
+		A07044A35E9428A02E6FE51A /* CrosscurrentBrowser in Frameworks */ = {isa = PBXBuildFile; productRef = 5AC2006BBBE6FBAC13BE6FC4 /* CrosscurrentBrowser */; };
+		A1EE54BDBB4C9D88A1B3E3EA /* CrosscurrentReader in Frameworks */ = {isa = PBXBuildFile; productRef = C5D8A6F318F737FC526B61A7 /* CrosscurrentReader */; };
+		A28930FA2DEE4232633DD043 /* CrosscurrentIPC in Frameworks */ = {isa = PBXBuildFile; productRef = 0D61B2E6C7AC9CFB153D78DE /* CrosscurrentIPC */; };
+		A5D0DE8A8BDBEFCE169E9E5A /* CrosscurrentIngestion in Frameworks */ = {isa = PBXBuildFile; productRef = AACF0E0C39FEC1D86035FDC9 /* CrosscurrentIngestion */; };
+		AA1C4C38FB6EE650BED0F077 /* CrosscurrentShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4033E09B86E941E7A8700A52 /* CrosscurrentShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		ACC06A0C95AB8BB1632CC615 /* SearchScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39318958E775B05FC45110A6 /* SearchScreen.swift */; };
+		AF640D7B54A12FE5CCB5428A /* CrosscurrentRanking in Frameworks */ = {isa = PBXBuildFile; productRef = 4C22389DE9E7493F5F5E613B /* CrosscurrentRanking */; };
+		B8CD2E086485FED44A9686E4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7681D8F643759D41F14069 /* SettingsView.swift */; };
+		C1EF51F9E95F1542CCEDFE72 /* CrosscurrentIPC in Frameworks */ = {isa = PBXBuildFile; productRef = FB0E162357EF333A15BBF5B1 /* CrosscurrentIPC */; };
+		C1F5E26EBC69BF351FDA3F76 /* CrosscurrentDomain in Frameworks */ = {isa = PBXBuildFile; productRef = B5B24B699E446DB6B84A4ABD /* CrosscurrentDomain */; };
+		C8E8BDBD9E047226A9F27F1D /* CrosscurrentAgent.app in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 15CC7DCD57FBF8F02BB8039E /* CrosscurrentAgent.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		CA98D26C6B3A368A8702F017 /* CrosscurrentIPC in Frameworks */ = {isa = PBXBuildFile; productRef = E12C52CD3F79644EB85DD02D /* CrosscurrentIPC */; };
+		CE4CB69EE4ED784C8447F8E8 /* CrosscurrentIngestion in Frameworks */ = {isa = PBXBuildFile; productRef = EEC47B082809117D37505E49 /* CrosscurrentIngestion */; };
+		E8AAA958481BEB1C78D4534F /* CrosscurrentApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53B40EF21028D172E7E34A05 /* CrosscurrentApp.swift */; };
+		EBE378177D7C8A2582FDE7DA /* CrosscurrentConnectors in Frameworks */ = {isa = PBXBuildFile; productRef = DD16C7E6769F0A69BD39D7A3 /* CrosscurrentConnectors */; };
+		EE911B03398F163A72DC2735 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E84B6068F8FCCC1AE522BAE /* RootView.swift */; };
+		F20F9E56CE9CA43E9A3D5A68 /* BrowserWorkerMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED000609D7E7DA9C30318637 /* BrowserWorkerMain.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0221D7E4942A601CC0D441FB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 17E8B5791F59B98984CB640E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0C55F5CF0EB7D63D603D6473;
+			remoteInfo = CrosscurrentAgent;
+		};
+		2A20E6BEF19B6A16AC00047A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 17E8B5791F59B98984CB640E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DDB8EC62B3222FBEF8C5ECA1;
+			remoteInfo = CrosscurrentBrowserWorker;
+		};
+		301F34847B6D7ABBFE02D95F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 17E8B5791F59B98984CB640E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E4609D1AD4DE4DF9A57773DC;
+			remoteInfo = Crosscurrent;
+		};
+		439EB477CCB1A30C24A1A11B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 17E8B5791F59B98984CB640E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5C1B4A03624F7E8254603987;
+			remoteInfo = CrosscurrentShare;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		1F0D0954951E2EB4641ABAD3 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				AA1C4C38FB6EE650BED0F077 /* CrosscurrentShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3C8CDDE873AB1953BCEA0741 /* Embed Dependencies */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LoginItems;
+			dstSubfolderSpec = 1;
+			files = (
+				C8E8BDBD9E047226A9F27F1D /* CrosscurrentAgent.app in Embed Dependencies */,
+				8368DBCAE68BF224F0FF008F /* CrosscurrentBrowserWorker.app in Embed Dependencies */,
+			);
+			name = "Embed Dependencies";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0B84E6BF2D01F8C9AAAE994F /* LibraryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryViews.swift; sourceTree = "<group>"; };
+		15CC7DCD57FBF8F02BB8039E /* CrosscurrentAgent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CrosscurrentAgent.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		282B40B889677F955C23D27E /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		2995505918B7155AD0A43AF9 /* Crosscurrent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Crosscurrent.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		39318958E775B05FC45110A6 /* SearchScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchScreen.swift; sourceTree = "<group>"; };
+		4033E09B86E941E7A8700A52 /* CrosscurrentShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CrosscurrentShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		53B40EF21028D172E7E34A05 /* CrosscurrentApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrosscurrentApp.swift; sourceTree = "<group>"; };
+		5E92D9A64B58B55103E28BC8 /* TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayView.swift; sourceTree = "<group>"; };
+		64945D1269BE0DCA8C9ED616 /* EventDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventDetailView.swift; sourceTree = "<group>"; };
+		8E84B6068F8FCCC1AE522BAE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		97A2CAE7FCB7B7B1DA106BE8 /* CrosscurrentKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CrosscurrentKit; path = Packages/CrosscurrentKit; sourceTree = SOURCE_ROOT; };
+		984A802A36BBC846162B74EE /* AgentMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMain.swift; sourceTree = "<group>"; };
+		BB8660C54F40EBF25C10619D /* CrosscurrentUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrosscurrentUITests.swift; sourceTree = "<group>"; };
+		C9B7C06EE432979C88476A53 /* CrosscurrentBrowserWorker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CrosscurrentBrowserWorker.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CF7681D8F643759D41F14069 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D1EC027581EDD97CF140AE11 /* FlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlowView.swift; sourceTree = "<group>"; };
+		D36B80F54AA2F45DB6766350 /* CrosscurrentUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CrosscurrentUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DA1963D6247F302A9D3FD528 /* ShareExtensionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareExtensionHandler.swift; sourceTree = "<group>"; };
+		ED000609D7E7DA9C30318637 /* BrowserWorkerMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserWorkerMain.swift; sourceTree = "<group>"; };
+		FAB54DB8D7B6FF87785153E8 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1072BBE29908D35BDA68F0C5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C1F5E26EBC69BF351FDA3F76 /* CrosscurrentDomain in Frameworks */,
+				4DC9D5B2DEFDE0F1C0AC6F1C /* CrosscurrentStorage in Frameworks */,
+				811E34A28B48A1996FFF76F1 /* CrosscurrentModels in Frameworks */,
+				6A5E313B29D05733F84B6F78 /* CrosscurrentDesignSystem in Frameworks */,
+				A1EE54BDBB4C9D88A1B3E3EA /* CrosscurrentReader in Frameworks */,
+				31A0C1623C139EEE1BD4F675 /* CrosscurrentRanking in Frameworks */,
+				445FBC648E642CEAB8F79933 /* CrosscurrentConnectors in Frameworks */,
+				A07044A35E9428A02E6FE51A /* CrosscurrentBrowser in Frameworks */,
+				CE4CB69EE4ED784C8447F8E8 /* CrosscurrentIngestion in Frameworks */,
+				465758B9EC4605D68A408D94 /* CrosscurrentIntelligence in Frameworks */,
+				589057F6C4B9A1B1B5BA99B5 /* CrosscurrentSearch in Frameworks */,
+				C1EF51F9E95F1542CCEDFE72 /* CrosscurrentIPC in Frameworks */,
+				4E3CFD158F7B6B73697B21F1 /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6869B17ACA80C742B86E0D13 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				423AF7CF97B768330C6DA60D /* CrosscurrentBrowser in Frameworks */,
+				CA98D26C6B3A368A8702F017 /* CrosscurrentIPC in Frameworks */,
+				8DFC5D12A3290C7D11AA902A /* CrosscurrentConnectors in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CDFF1774EB2BF755C2476ABF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				82105E26EB6E835CCF86E058 /* CrosscurrentStorage in Frameworks */,
+				A5D0DE8A8BDBEFCE169E9E5A /* CrosscurrentIngestion in Frameworks */,
+				092F9210750CB078FAEF0A5D /* CrosscurrentIntelligence in Frameworks */,
+				761E3647F470ED7E2A8F9CA0 /* CrosscurrentSearch in Frameworks */,
+				AF640D7B54A12FE5CCB5428A /* CrosscurrentRanking in Frameworks */,
+				A28930FA2DEE4232633DD043 /* CrosscurrentIPC in Frameworks */,
+				933195DDF4F84D659F352688 /* CrosscurrentBrowser in Frameworks */,
+				EBE378177D7C8A2582FDE7DA /* CrosscurrentConnectors in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D3A451653D88A5F34977903B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5DD31BAB8942A5CA4A67FA22 /* CrosscurrentDomain in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		2982A48CC168A0B11C893F9A /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				E24C16B1FF64EFEBC7DD3647 /* CrosscurrentUITests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		42834B904C4881616678E8C9 /* Crosscurrent */ = {
+			isa = PBXGroup;
+			children = (
+				EDC2663523155A13944E8797 /* Resources */,
+				53B40EF21028D172E7E34A05 /* CrosscurrentApp.swift */,
+				64945D1269BE0DCA8C9ED616 /* EventDetailView.swift */,
+				D1EC027581EDD97CF140AE11 /* FlowView.swift */,
+				0B84E6BF2D01F8C9AAAE994F /* LibraryViews.swift */,
+				8E84B6068F8FCCC1AE522BAE /* RootView.swift */,
+				39318958E775B05FC45110A6 /* SearchScreen.swift */,
+				CF7681D8F643759D41F14069 /* SettingsView.swift */,
+				5E92D9A64B58B55103E28BC8 /* TodayView.swift */,
+			);
+			path = Crosscurrent;
+			sourceTree = "<group>";
+		};
+		7A7BC89375B9B28FED110F17 /* CrosscurrentShare */ = {
+			isa = PBXGroup;
+			children = (
+				DA1963D6247F302A9D3FD528 /* ShareExtensionHandler.swift */,
+			);
+			path = CrosscurrentShare;
+			sourceTree = "<group>";
+		};
+		86FF435B081421AFF1AE5AF7 /* CrosscurrentAgent */ = {
+			isa = PBXGroup;
+			children = (
+				984A802A36BBC846162B74EE /* AgentMain.swift */,
+			);
+			path = CrosscurrentAgent;
+			sourceTree = "<group>";
+		};
+		91B183D87A10B9DECE394F7D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				2995505918B7155AD0A43AF9 /* Crosscurrent.app */,
+				15CC7DCD57FBF8F02BB8039E /* CrosscurrentAgent.app */,
+				C9B7C06EE432979C88476A53 /* CrosscurrentBrowserWorker.app */,
+				4033E09B86E941E7A8700A52 /* CrosscurrentShare.appex */,
+				D36B80F54AA2F45DB6766350 /* CrosscurrentUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		98302AB5A38C7BF0209DB6BD /* Apps */ = {
+			isa = PBXGroup;
+			children = (
+				42834B904C4881616678E8C9 /* Crosscurrent */,
+				86FF435B081421AFF1AE5AF7 /* CrosscurrentAgent */,
+				F16A6D47ED2471EAFB29EF73 /* CrosscurrentBrowserWorker */,
+				7A7BC89375B9B28FED110F17 /* CrosscurrentShare */,
+			);
+			path = Apps;
+			sourceTree = "<group>";
+		};
+		ACAAB03294882F129638E5AF /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				97A2CAE7FCB7B7B1DA106BE8 /* CrosscurrentKit */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		D324530439495A58EC0A863D = {
+			isa = PBXGroup;
+			children = (
+				98302AB5A38C7BF0209DB6BD /* Apps */,
+				ACAAB03294882F129638E5AF /* Packages */,
+				2982A48CC168A0B11C893F9A /* Tests */,
+				91B183D87A10B9DECE394F7D /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E24C16B1FF64EFEBC7DD3647 /* CrosscurrentUITests */ = {
+			isa = PBXGroup;
+			children = (
+				BB8660C54F40EBF25C10619D /* CrosscurrentUITests.swift */,
+			);
+			path = CrosscurrentUITests;
+			sourceTree = "<group>";
+		};
+		EDC2663523155A13944E8797 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				9929BD1FB50B41990BF29A11 /* Localizable.strings */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		F16A6D47ED2471EAFB29EF73 /* CrosscurrentBrowserWorker */ = {
+			isa = PBXGroup;
+			children = (
+				ED000609D7E7DA9C30318637 /* BrowserWorkerMain.swift */,
+			);
+			path = CrosscurrentBrowserWorker;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0C55F5CF0EB7D63D603D6473 /* CrosscurrentAgent */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A2D2AFEB4955D391DDA102DF /* Build configuration list for PBXNativeTarget "CrosscurrentAgent" */;
+			buildPhases = (
+				DD813D71F095CB06DE1EA8F2 /* Xcode Header-Only NumKong Shim */,
+				D740C8553376413673477640 /* Sources */,
+				CDFF1774EB2BF755C2476ABF /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CrosscurrentAgent;
+			packageProductDependencies = (
+				6D9CDA256892BDACE14A7371 /* CrosscurrentStorage */,
+				AACF0E0C39FEC1D86035FDC9 /* CrosscurrentIngestion */,
+				4E36FF658E8113FDAB505E63 /* CrosscurrentIntelligence */,
+				A9E3851A85F5D6E48735890A /* CrosscurrentSearch */,
+				4C22389DE9E7493F5F5E613B /* CrosscurrentRanking */,
+				0D61B2E6C7AC9CFB153D78DE /* CrosscurrentIPC */,
+				5A536CC490F12EC6B42B860E /* CrosscurrentBrowser */,
+				DD16C7E6769F0A69BD39D7A3 /* CrosscurrentConnectors */,
+			);
+			productName = CrosscurrentAgent;
+			productReference = 15CC7DCD57FBF8F02BB8039E /* CrosscurrentAgent.app */;
+			productType = "com.apple.product-type.application";
+		};
+		5C1B4A03624F7E8254603987 /* CrosscurrentShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 324920F0BFE44FCB04C44F51 /* Build configuration list for PBXNativeTarget "CrosscurrentShare" */;
+			buildPhases = (
+				4CB6F7BC52264251E0615DD1 /* Sources */,
+				D3A451653D88A5F34977903B /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CrosscurrentShare;
+			packageProductDependencies = (
+				DE0AB5E8071261D4C00037DF /* CrosscurrentDomain */,
+			);
+			productName = CrosscurrentShare;
+			productReference = 4033E09B86E941E7A8700A52 /* CrosscurrentShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		D52EA5C3F64931F55FF4A954 /* CrosscurrentUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5B61D2EADB8B459428321F2F /* Build configuration list for PBXNativeTarget "CrosscurrentUITests" */;
+			buildPhases = (
+				B2F4B15B05638B41A3DBEE04 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6BA5953A77B5C6345CCCFA83 /* PBXTargetDependency */,
+			);
+			name = CrosscurrentUITests;
+			packageProductDependencies = (
+			);
+			productName = CrosscurrentUITests;
+			productReference = D36B80F54AA2F45DB6766350 /* CrosscurrentUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		DDB8EC62B3222FBEF8C5ECA1 /* CrosscurrentBrowserWorker */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CD682983DA564AE8325B5E86 /* Build configuration list for PBXNativeTarget "CrosscurrentBrowserWorker" */;
+			buildPhases = (
+				D6E71B32B69DE53D6B369FD8 /* Sources */,
+				6869B17ACA80C742B86E0D13 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CrosscurrentBrowserWorker;
+			packageProductDependencies = (
+				FBE626A77EAA2EC6AEC9BF99 /* CrosscurrentBrowser */,
+				E12C52CD3F79644EB85DD02D /* CrosscurrentIPC */,
+				9B95D584A6CBA6553723DF57 /* CrosscurrentConnectors */,
+			);
+			productName = CrosscurrentBrowserWorker;
+			productReference = C9B7C06EE432979C88476A53 /* CrosscurrentBrowserWorker.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E4609D1AD4DE4DF9A57773DC /* Crosscurrent */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 023424CD7C0738A090D3BE02 /* Build configuration list for PBXNativeTarget "Crosscurrent" */;
+			buildPhases = (
+				553BD358550B15562C6E58B6 /* Sources */,
+				52F2D7FE0D9956A2D83572F2 /* Resources */,
+				1072BBE29908D35BDA68F0C5 /* Frameworks */,
+				1F0D0954951E2EB4641ABAD3 /* Embed Foundation Extensions */,
+				3C8CDDE873AB1953BCEA0741 /* Embed Dependencies */,
+				AA75BD5DB4D4F5DE5D67B1E4 /* Embed SMAppService LaunchAgents */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D36E0FD59F005054DBD40E6B /* PBXTargetDependency */,
+				83197BEA8652C32CE50309D6 /* PBXTargetDependency */,
+				84E55091B4FC315CE49AED57 /* PBXTargetDependency */,
+			);
+			name = Crosscurrent;
+			packageProductDependencies = (
+				B5B24B699E446DB6B84A4ABD /* CrosscurrentDomain */,
+				9A3D3359063168F938FE7994 /* CrosscurrentStorage */,
+				F9B6F7726F69C397217FECD4 /* CrosscurrentModels */,
+				4F5EA216F27AE9625DA183FC /* CrosscurrentDesignSystem */,
+				C5D8A6F318F737FC526B61A7 /* CrosscurrentReader */,
+				83FEB083D310CD5F59C820AA /* CrosscurrentRanking */,
+				C0169C1DCB43C5BFC5B92012 /* CrosscurrentConnectors */,
+				5AC2006BBBE6FBAC13BE6FC4 /* CrosscurrentBrowser */,
+				EEC47B082809117D37505E49 /* CrosscurrentIngestion */,
+				B85DF01AD8862ED260A5B029 /* CrosscurrentIntelligence */,
+				B9CC7B2EF77847C47C7C37CB /* CrosscurrentSearch */,
+				FB0E162357EF333A15BBF5B1 /* CrosscurrentIPC */,
+				A38EBCE4EECCBC13594D3045 /* Sparkle */,
+			);
+			productName = Crosscurrent;
+			productReference = 2995505918B7155AD0A43AF9 /* Crosscurrent.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		17E8B5791F59B98984CB640E /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					0C55F5CF0EB7D63D603D6473 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					5C1B4A03624F7E8254603987 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					D52EA5C3F64931F55FF4A954 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+						TestTargetID = E4609D1AD4DE4DF9A57773DC;
+					};
+					DDB8EC62B3222FBEF8C5ECA1 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					E4609D1AD4DE4DF9A57773DC = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 9412150D408F4D15FF6CBCEF /* Build configuration list for PBXProject "Crosscurrent" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+				"zh-Hans",
+			);
+			mainGroup = D324530439495A58EC0A863D;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				48C2A82DC4B77D922213A9F4 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				C51E96CCE80B826CE456229F /* XCLocalSwiftPackageReference "Packages/CrosscurrentKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 91B183D87A10B9DECE394F7D /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E4609D1AD4DE4DF9A57773DC /* Crosscurrent */,
+				0C55F5CF0EB7D63D603D6473 /* CrosscurrentAgent */,
+				DDB8EC62B3222FBEF8C5ECA1 /* CrosscurrentBrowserWorker */,
+				5C1B4A03624F7E8254603987 /* CrosscurrentShare */,
+				D52EA5C3F64931F55FF4A954 /* CrosscurrentUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		52F2D7FE0D9956A2D83572F2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				57864CFF309A91EDB5DC7632 /* Localizable.strings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		AA75BD5DB4D4F5DE5D67B1E4 /* Embed SMAppService LaunchAgents */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Config/LaunchAgents/com.chonghanqin.crosscurrent.agent.plist",
+				"$(SRCROOT)/Config/LaunchAgents/com.chonghanqin.crosscurrent.browser.plist",
+			);
+			name = "Embed SMAppService LaunchAgents";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LaunchAgents/com.chonghanqin.crosscurrent.agent.plist",
+				"$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LaunchAgents/com.chonghanqin.crosscurrent.browser.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "destination=\"$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Library/LaunchAgents\"\nmkdir -p \"$destination\"\ncp \"$SRCROOT/Config/LaunchAgents/com.chonghanqin.crosscurrent.agent.plist\" \"$destination/com.chonghanqin.crosscurrent.agent.plist\"\ncp \"$SRCROOT/Config/LaunchAgents/com.chonghanqin.crosscurrent.browser.plist\" \"$destination/com.chonghanqin.crosscurrent.browser.plist\"\n";
+		};
+		DD813D71F095CB06DE1EA8F2 /* Xcode Header-Only NumKong Shim */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Xcode Header-Only NumKong Shim";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/CNumKong.o",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "mkdir -p \"$BUILT_PRODUCTS_DIR\"\nif [[ ! -f \"$BUILT_PRODUCTS_DIR/CNumKong.o\" ]]; then\n  xcrun clang -c \"$SRCROOT/BuildSupport/CNumKongShim.c\" -o \"$BUILT_PRODUCTS_DIR/CNumKong.o\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4CB6F7BC52264251E0615DD1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B3CB210A2307A5187B7919D /* ShareExtensionHandler.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		553BD358550B15562C6E58B6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E8AAA958481BEB1C78D4534F /* CrosscurrentApp.swift in Sources */,
+				246D1835F305ADC1F4E58477 /* EventDetailView.swift in Sources */,
+				1CAC03C4AE4017C9C4EC7CED /* FlowView.swift in Sources */,
+				779303FA69D90F14060DB0F5 /* LibraryViews.swift in Sources */,
+				EE911B03398F163A72DC2735 /* RootView.swift in Sources */,
+				ACC06A0C95AB8BB1632CC615 /* SearchScreen.swift in Sources */,
+				B8CD2E086485FED44A9686E4 /* SettingsView.swift in Sources */,
+				67581BB7BEEB19647BF8389E /* TodayView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B2F4B15B05638B41A3DBEE04 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				141CF06A163B0DC2BAAD8CCA /* CrosscurrentUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D6E71B32B69DE53D6B369FD8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F20F9E56CE9CA43E9A3D5A68 /* BrowserWorkerMain.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D740C8553376413673477640 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7B7030C3A57B2685611A3E77 /* AgentMain.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		6BA5953A77B5C6345CCCFA83 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E4609D1AD4DE4DF9A57773DC /* Crosscurrent */;
+			targetProxy = 301F34847B6D7ABBFE02D95F /* PBXContainerItemProxy */;
+		};
+		83197BEA8652C32CE50309D6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0C55F5CF0EB7D63D603D6473 /* CrosscurrentAgent */;
+			targetProxy = 0221D7E4942A601CC0D441FB /* PBXContainerItemProxy */;
+		};
+		84E55091B4FC315CE49AED57 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DDB8EC62B3222FBEF8C5ECA1 /* CrosscurrentBrowserWorker */;
+			targetProxy = 2A20E6BEF19B6A16AC00047A /* PBXContainerItemProxy */;
+		};
+		D36E0FD59F005054DBD40E6B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5C1B4A03624F7E8254603987 /* CrosscurrentShare */;
+			targetProxy = 439EB477CCB1A30C24A1A11B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXVariantGroup section */
+		9929BD1FB50B41990BF29A11 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				282B40B889677F955C23D27E /* en */,
+				FAB54DB8D7B6FF87785153E8 /* zh-Hans */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin XCBuildConfiguration section */
+		22AB81E577F5548A34FC0C00 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/Crosscurrent.developerid.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CROSSCURRENT_APPCAST_URL = "";
+				CROSSCURRENT_SPARKLE_PUBLIC_KEY = "";
+				INFOPLIST_FILE = "Config/Info/Crosscurrent-Info.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent;
+				PRODUCT_NAME = Crosscurrent;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		3527F2730268B9D9C1B7292F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/CrosscurrentShare.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Config/Info/CrosscurrentShare-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent.share;
+				PRODUCT_NAME = CrosscurrentShare;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		44447D35841ECA8B14FE48CE /* Sandbox */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/CrosscurrentAgent.sandbox.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Config/Info/CrosscurrentAgent-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent.agent;
+				PRODUCT_NAME = CrosscurrentAgent;
+				SDKROOT = macosx;
+			};
+			name = Sandbox;
+		};
+		46E5E3C38D1B0C23745D649D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		4FDF52BB86D7BB9DC49F8BF4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.CrosscurrentUITests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = Crosscurrent;
+			};
+			name = Release;
+		};
+		57856A55E723E064A18BACA2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.CrosscurrentUITests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = Crosscurrent;
+			};
+			name = Debug;
+		};
+		6D4BB1A20CF3ADDCC75C0D0D /* Sandbox */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/Crosscurrent.sandbox.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CROSSCURRENT_APPCAST_URL = "";
+				CROSSCURRENT_SPARKLE_PUBLIC_KEY = "";
+				INFOPLIST_FILE = "Config/Info/Crosscurrent-Info.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent;
+				PRODUCT_NAME = Crosscurrent;
+				SDKROOT = macosx;
+			};
+			name = Sandbox;
+		};
+		8043CCBA636C7E8989C2F12A /* Sandbox */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.CrosscurrentUITests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = Crosscurrent;
+			};
+			name = Sandbox;
+		};
+		949DDBCE4676EB197704082B /* Sandbox */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Sandbox;
+		};
+		997A267E3D13E1BE3A392E2F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		9E807AA53D10B43F61DFF3DE /* Sandbox */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/CrosscurrentBrowserWorker.sandbox.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Config/Info/CrosscurrentBrowserWorker-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent.browser;
+				PRODUCT_NAME = CrosscurrentBrowserWorker;
+				SDKROOT = macosx;
+			};
+			name = Sandbox;
+		};
+		B1DEEAEEB4BAFC3A3DEDA435 /* Sandbox */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/CrosscurrentShare.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Config/Info/CrosscurrentShare-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent.share;
+				PRODUCT_NAME = CrosscurrentShare;
+				SDKROOT = macosx;
+			};
+			name = Sandbox;
+		};
+		D30D8BDCA6D64C02889DB4A5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/CrosscurrentBrowserWorker.developerid.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Config/Info/CrosscurrentBrowserWorker-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent.browser;
+				PRODUCT_NAME = CrosscurrentBrowserWorker;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		DD764581CDC0B50A632BC113 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/CrosscurrentAgent.developerid.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Config/Info/CrosscurrentAgent-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent.agent;
+				PRODUCT_NAME = CrosscurrentAgent;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		DDD02E8F688B03E58F75B9ED /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/CrosscurrentShare.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Config/Info/CrosscurrentShare-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent.share;
+				PRODUCT_NAME = CrosscurrentShare;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		E206DDE1B401E2375E652D9F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/CrosscurrentAgent.developerid.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Config/Info/CrosscurrentAgent-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent.agent;
+				PRODUCT_NAME = CrosscurrentAgent;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		EE97AC1CB697E8DF870F4F0C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/CrosscurrentBrowserWorker.developerid.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Config/Info/CrosscurrentBrowserWorker-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent.browser;
+				PRODUCT_NAME = CrosscurrentBrowserWorker;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		FACB348C546331FBF69A2204 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Entitlements/Crosscurrent.developerid.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CROSSCURRENT_APPCAST_URL = "";
+				CROSSCURRENT_SPARKLE_PUBLIC_KEY = "";
+				INFOPLIST_FILE = "Config/Info/Crosscurrent-Info.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chonghanqin.crosscurrent;
+				PRODUCT_NAME = Crosscurrent;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		023424CD7C0738A090D3BE02 /* Build configuration list for PBXNativeTarget "Crosscurrent" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FACB348C546331FBF69A2204 /* Debug */,
+				22AB81E577F5548A34FC0C00 /* Release */,
+				6D4BB1A20CF3ADDCC75C0D0D /* Sandbox */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		324920F0BFE44FCB04C44F51 /* Build configuration list for PBXNativeTarget "CrosscurrentShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DDD02E8F688B03E58F75B9ED /* Debug */,
+				3527F2730268B9D9C1B7292F /* Release */,
+				B1DEEAEEB4BAFC3A3DEDA435 /* Sandbox */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		5B61D2EADB8B459428321F2F /* Build configuration list for PBXNativeTarget "CrosscurrentUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				57856A55E723E064A18BACA2 /* Debug */,
+				4FDF52BB86D7BB9DC49F8BF4 /* Release */,
+				8043CCBA636C7E8989C2F12A /* Sandbox */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9412150D408F4D15FF6CBCEF /* Build configuration list for PBXProject "Crosscurrent" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				997A267E3D13E1BE3A392E2F /* Debug */,
+				46E5E3C38D1B0C23745D649D /* Release */,
+				949DDBCE4676EB197704082B /* Sandbox */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A2D2AFEB4955D391DDA102DF /* Build configuration list for PBXNativeTarget "CrosscurrentAgent" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DD764581CDC0B50A632BC113 /* Debug */,
+				E206DDE1B401E2375E652D9F /* Release */,
+				44447D35841ECA8B14FE48CE /* Sandbox */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CD682983DA564AE8325B5E86 /* Build configuration list for PBXNativeTarget "CrosscurrentBrowserWorker" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D30D8BDCA6D64C02889DB4A5 /* Debug */,
+				EE97AC1CB697E8DF870F4F0C /* Release */,
+				9E807AA53D10B43F61DFF3DE /* Sandbox */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		C51E96CCE80B826CE456229F /* XCLocalSwiftPackageReference "Packages/CrosscurrentKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/CrosscurrentKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		48C2A82DC4B77D922213A9F4 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.9.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0D61B2E6C7AC9CFB153D78DE /* CrosscurrentIPC */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentIPC;
+		};
+		4C22389DE9E7493F5F5E613B /* CrosscurrentRanking */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentRanking;
+		};
+		4E36FF658E8113FDAB505E63 /* CrosscurrentIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentIntelligence;
+		};
+		4F5EA216F27AE9625DA183FC /* CrosscurrentDesignSystem */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentDesignSystem;
+		};
+		5A536CC490F12EC6B42B860E /* CrosscurrentBrowser */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentBrowser;
+		};
+		5AC2006BBBE6FBAC13BE6FC4 /* CrosscurrentBrowser */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentBrowser;
+		};
+		6D9CDA256892BDACE14A7371 /* CrosscurrentStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentStorage;
+		};
+		83FEB083D310CD5F59C820AA /* CrosscurrentRanking */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentRanking;
+		};
+		9A3D3359063168F938FE7994 /* CrosscurrentStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentStorage;
+		};
+		9B95D584A6CBA6553723DF57 /* CrosscurrentConnectors */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentConnectors;
+		};
+		A38EBCE4EECCBC13594D3045 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 48C2A82DC4B77D922213A9F4 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+		A9E3851A85F5D6E48735890A /* CrosscurrentSearch */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentSearch;
+		};
+		AACF0E0C39FEC1D86035FDC9 /* CrosscurrentIngestion */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentIngestion;
+		};
+		B5B24B699E446DB6B84A4ABD /* CrosscurrentDomain */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentDomain;
+		};
+		B85DF01AD8862ED260A5B029 /* CrosscurrentIntelligence */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentIntelligence;
+		};
+		B9CC7B2EF77847C47C7C37CB /* CrosscurrentSearch */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentSearch;
+		};
+		C0169C1DCB43C5BFC5B92012 /* CrosscurrentConnectors */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentConnectors;
+		};
+		C5D8A6F318F737FC526B61A7 /* CrosscurrentReader */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentReader;
+		};
+		DD16C7E6769F0A69BD39D7A3 /* CrosscurrentConnectors */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentConnectors;
+		};
+		DE0AB5E8071261D4C00037DF /* CrosscurrentDomain */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentDomain;
+		};
+		E12C52CD3F79644EB85DD02D /* CrosscurrentIPC */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentIPC;
+		};
+		EEC47B082809117D37505E49 /* CrosscurrentIngestion */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentIngestion;
+		};
+		F9B6F7726F69C397217FECD4 /* CrosscurrentModels */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentModels;
+		};
+		FB0E162357EF333A15BBF5B1 /* CrosscurrentIPC */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentIPC;
+		};
+		FBE626A77EAA2EC6AEC9BF99 /* CrosscurrentBrowser */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentBrowser;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 17E8B5791F59B98984CB640E /* Project object */;
+}

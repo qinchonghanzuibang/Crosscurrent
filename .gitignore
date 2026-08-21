@@ -6,4 +6,4 @@ xcuserdata/
 *.xccheckout
 *.xcscmblueprint
 .swiftpm/
-Packages/FeedFlowKit/.build/
+Packages/CrosscurrentKit/.build/

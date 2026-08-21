@@ -1,4 +1,4 @@
-name: FeedFlow
+name: Crosscurrent
 options:
   bundleIdPrefix: com.chonghanqin
   deploymentTarget:
@@ -28,110 +28,110 @@ settings:
       SWIFT_COMPILATION_MODE: wholemodule
       VALIDATE_PRODUCT: true
 packages:
-  FeedFlowKit:
-    path: Packages/FeedFlowKit
+  CrosscurrentKit:
+    path: Packages/CrosscurrentKit
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: 2.9.4
 targets:
-  FeedFlow:
+  Crosscurrent:
     type: application
     platform: macOS
-    sources: Apps/FeedFlow
+    sources: Apps/Crosscurrent
     info:
-      path: Config/Info/FeedFlow-Info.plist
+      path: Config/Info/Crosscurrent-Info.plist
       properties:
-        CFBundleDisplayName: FeedFlow
+        CFBundleDisplayName: Crosscurrent
         LSApplicationCategoryType: public.app-category.news
         NSHumanReadableCopyright: Copyright © 2026 Chonghan Qin
-        FeedFlowTeamIdentifier: $(DEVELOPMENT_TEAM)
-        SUFeedURL: $(FEEDFLOW_APPCAST_URL)
-        SUPublicEDKey: $(FEEDFLOW_SPARKLE_PUBLIC_KEY)
+        CrosscurrentTeamIdentifier: $(DEVELOPMENT_TEAM)
+        SUFeedURL: $(CROSSCURRENT_APPCAST_URL)
+        SUPublicEDKey: $(CROSSCURRENT_SPARKLE_PUBLIC_KEY)
         CFBundleURLTypes:
-          - CFBundleURLName: FeedFlow Deep Links
-            CFBundleURLSchemes: [feedflow]
+          - CFBundleURLName: Crosscurrent Deep Links
+            CFBundleURLSchemes: [crosscurrent]
     settings:
       base:
-        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlow.developerid.entitlements
-        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.feedflow
-        PRODUCT_NAME: FeedFlow
+        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/Crosscurrent.developerid.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.crosscurrent
+        PRODUCT_NAME: Crosscurrent
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news
-        FEEDFLOW_APPCAST_URL: ""
-        FEEDFLOW_SPARKLE_PUBLIC_KEY: ""
+        CROSSCURRENT_APPCAST_URL: ""
+        CROSSCURRENT_SPARKLE_PUBLIC_KEY: ""
       configs:
         Sandbox:
-          CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlow.sandbox.entitlements
+          CODE_SIGN_ENTITLEMENTS: Config/Entitlements/Crosscurrent.sandbox.entitlements
     postBuildScripts:
       - name: Embed SMAppService LaunchAgents
         basedOnDependencyAnalysis: true
         inputFiles:
-          - $(SRCROOT)/Config/LaunchAgents/com.chonghanqin.feedflow.agent.plist
-          - $(SRCROOT)/Config/LaunchAgents/com.chonghanqin.feedflow.browser.plist
+          - $(SRCROOT)/Config/LaunchAgents/com.chonghanqin.crosscurrent.agent.plist
+          - $(SRCROOT)/Config/LaunchAgents/com.chonghanqin.crosscurrent.browser.plist
         outputFiles:
-          - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LaunchAgents/com.chonghanqin.feedflow.agent.plist
-          - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LaunchAgents/com.chonghanqin.feedflow.browser.plist
+          - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LaunchAgents/com.chonghanqin.crosscurrent.agent.plist
+          - $(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Library/LaunchAgents/com.chonghanqin.crosscurrent.browser.plist
         script: |
           destination="$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Library/LaunchAgents"
           mkdir -p "$destination"
-          cp "$SRCROOT/Config/LaunchAgents/com.chonghanqin.feedflow.agent.plist" "$destination/com.chonghanqin.feedflow.agent.plist"
-          cp "$SRCROOT/Config/LaunchAgents/com.chonghanqin.feedflow.browser.plist" "$destination/com.chonghanqin.feedflow.browser.plist"
+          cp "$SRCROOT/Config/LaunchAgents/com.chonghanqin.crosscurrent.agent.plist" "$destination/com.chonghanqin.crosscurrent.agent.plist"
+          cp "$SRCROOT/Config/LaunchAgents/com.chonghanqin.crosscurrent.browser.plist" "$destination/com.chonghanqin.crosscurrent.browser.plist"
     dependencies:
-      - package: FeedFlowKit
-        product: FeedFlowDomain
-      - package: FeedFlowKit
-        product: FeedFlowStorage
-      - package: FeedFlowKit
-        product: FeedFlowModels
-      - package: FeedFlowKit
-        product: FeedFlowDesignSystem
-      - package: FeedFlowKit
-        product: FeedFlowReader
-      - package: FeedFlowKit
-        product: FeedFlowRanking
-      - package: FeedFlowKit
-        product: FeedFlowConnectors
-      - package: FeedFlowKit
-        product: FeedFlowBrowser
-      - package: FeedFlowKit
-        product: FeedFlowIngestion
-      - package: FeedFlowKit
-        product: FeedFlowIntelligence
-      - package: FeedFlowKit
-        product: FeedFlowSearch
-      - package: FeedFlowKit
-        product: FeedFlowIPC
+      - package: CrosscurrentKit
+        product: CrosscurrentDomain
+      - package: CrosscurrentKit
+        product: CrosscurrentStorage
+      - package: CrosscurrentKit
+        product: CrosscurrentModels
+      - package: CrosscurrentKit
+        product: CrosscurrentDesignSystem
+      - package: CrosscurrentKit
+        product: CrosscurrentReader
+      - package: CrosscurrentKit
+        product: CrosscurrentRanking
+      - package: CrosscurrentKit
+        product: CrosscurrentConnectors
+      - package: CrosscurrentKit
+        product: CrosscurrentBrowser
+      - package: CrosscurrentKit
+        product: CrosscurrentIngestion
+      - package: CrosscurrentKit
+        product: CrosscurrentIntelligence
+      - package: CrosscurrentKit
+        product: CrosscurrentSearch
+      - package: CrosscurrentKit
+        product: CrosscurrentIPC
       - package: Sparkle
         product: Sparkle
-      - target: FeedFlowShare
+      - target: CrosscurrentShare
         embed: true
-      - target: FeedFlowAgent
-        embed: true
-        copy:
-          destination: wrapper
-          subpath: Contents/Library/LoginItems
-      - target: FeedFlowBrowserWorker
+      - target: CrosscurrentAgent
         embed: true
         copy:
           destination: wrapper
           subpath: Contents/Library/LoginItems
-  FeedFlowAgent:
+      - target: CrosscurrentBrowserWorker
+        embed: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/LoginItems
+  CrosscurrentAgent:
     type: application
     platform: macOS
-    sources: Apps/FeedFlowAgent
+    sources: Apps/CrosscurrentAgent
     info:
-      path: Config/Info/FeedFlowAgent-Info.plist
+      path: Config/Info/CrosscurrentAgent-Info.plist
       properties:
-        CFBundleDisplayName: FeedFlow Agent
+        CFBundleDisplayName: Crosscurrent Agent
         LSUIElement: true
-        FeedFlowTeamIdentifier: $(DEVELOPMENT_TEAM)
+        CrosscurrentTeamIdentifier: $(DEVELOPMENT_TEAM)
     settings:
       base:
-        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlowAgent.developerid.entitlements
-        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.feedflow.agent
-        PRODUCT_NAME: FeedFlowAgent
+        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/CrosscurrentAgent.developerid.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.crosscurrent.agent
+        PRODUCT_NAME: CrosscurrentAgent
       configs:
         Sandbox:
-          CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlowAgent.sandbox.entitlements
+          CODE_SIGN_ENTITLEMENTS: Config/Entitlements/CrosscurrentAgent.sandbox.entitlements
     preBuildScripts:
       - name: Xcode Header-Only NumKong Shim
         basedOnDependencyAnalysis: false
@@ -143,55 +143,55 @@ targets:
             xcrun clang -c "$SRCROOT/BuildSupport/CNumKongShim.c" -o "$BUILT_PRODUCTS_DIR/CNumKong.o"
           fi
     dependencies:
-      - package: FeedFlowKit
-        product: FeedFlowStorage
-      - package: FeedFlowKit
-        product: FeedFlowIngestion
-      - package: FeedFlowKit
-        product: FeedFlowIntelligence
-      - package: FeedFlowKit
-        product: FeedFlowSearch
-      - package: FeedFlowKit
-        product: FeedFlowRanking
-      - package: FeedFlowKit
-        product: FeedFlowIPC
-      - package: FeedFlowKit
-        product: FeedFlowBrowser
-      - package: FeedFlowKit
-        product: FeedFlowConnectors
-  FeedFlowBrowserWorker:
+      - package: CrosscurrentKit
+        product: CrosscurrentStorage
+      - package: CrosscurrentKit
+        product: CrosscurrentIngestion
+      - package: CrosscurrentKit
+        product: CrosscurrentIntelligence
+      - package: CrosscurrentKit
+        product: CrosscurrentSearch
+      - package: CrosscurrentKit
+        product: CrosscurrentRanking
+      - package: CrosscurrentKit
+        product: CrosscurrentIPC
+      - package: CrosscurrentKit
+        product: CrosscurrentBrowser
+      - package: CrosscurrentKit
+        product: CrosscurrentConnectors
+  CrosscurrentBrowserWorker:
     type: application
     platform: macOS
-    sources: Apps/FeedFlowBrowserWorker
+    sources: Apps/CrosscurrentBrowserWorker
     info:
-      path: Config/Info/FeedFlowBrowserWorker-Info.plist
+      path: Config/Info/CrosscurrentBrowserWorker-Info.plist
       properties:
-        CFBundleDisplayName: FeedFlow Browser
+        CFBundleDisplayName: Crosscurrent Browser
         LSUIElement: true
-        FeedFlowTeamIdentifier: $(DEVELOPMENT_TEAM)
+        CrosscurrentTeamIdentifier: $(DEVELOPMENT_TEAM)
     settings:
       base:
-        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlowBrowserWorker.developerid.entitlements
-        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.feedflow.browser
-        PRODUCT_NAME: FeedFlowBrowserWorker
+        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/CrosscurrentBrowserWorker.developerid.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.crosscurrent.browser
+        PRODUCT_NAME: CrosscurrentBrowserWorker
       configs:
         Sandbox:
-          CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlowBrowserWorker.sandbox.entitlements
+          CODE_SIGN_ENTITLEMENTS: Config/Entitlements/CrosscurrentBrowserWorker.sandbox.entitlements
     dependencies:
-      - package: FeedFlowKit
-        product: FeedFlowBrowser
-      - package: FeedFlowKit
-        product: FeedFlowIPC
-      - package: FeedFlowKit
-        product: FeedFlowConnectors
-  FeedFlowShare:
+      - package: CrosscurrentKit
+        product: CrosscurrentBrowser
+      - package: CrosscurrentKit
+        product: CrosscurrentIPC
+      - package: CrosscurrentKit
+        product: CrosscurrentConnectors
+  CrosscurrentShare:
     type: app-extension
     platform: macOS
-    sources: Apps/FeedFlowShare
+    sources: Apps/CrosscurrentShare
     info:
-      path: Config/Info/FeedFlowShare-Info.plist
+      path: Config/Info/CrosscurrentShare-Info.plist
       properties:
-        CFBundleDisplayName: Add to FeedFlow
+        CFBundleDisplayName: Add to Crosscurrent
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareExtensionHandler
@@ -199,44 +199,44 @@ targets:
             NSExtensionActivationRule: 'SUBQUERY(extensionItems, $item, SUBQUERY($item.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.plain-text").@count > 0).@count > 0'
     settings:
       base:
-        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/FeedFlowShare.entitlements
-        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.feedflow.share
-        PRODUCT_NAME: FeedFlowShare
+        CODE_SIGN_ENTITLEMENTS: Config/Entitlements/CrosscurrentShare.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.chonghanqin.crosscurrent.share
+        PRODUCT_NAME: CrosscurrentShare
     dependencies:
-      - package: FeedFlowKit
-        product: FeedFlowDomain
-  FeedFlowUITests:
+      - package: CrosscurrentKit
+        product: CrosscurrentDomain
+  CrosscurrentUITests:
     type: bundle.ui-testing
     platform: macOS
-    sources: Tests/FeedFlowUITests
+    sources: Tests/CrosscurrentUITests
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
     dependencies:
-      - target: FeedFlow
+      - target: Crosscurrent
 schemes:
-  FeedFlow:
+  Crosscurrent:
     build:
       targets:
-        FeedFlow: all
-        FeedFlowAgent: all
-        FeedFlowBrowserWorker: all
-        FeedFlowShare: all
-        FeedFlowUITests: [test]
+        Crosscurrent: all
+        CrosscurrentAgent: all
+        CrosscurrentBrowserWorker: all
+        CrosscurrentShare: all
+        CrosscurrentUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - FeedFlowUITests
+        - CrosscurrentUITests
     archive:
       config: Release
-  FeedFlow-Sandbox:
+  Crosscurrent-Sandbox:
     build:
       targets:
-        FeedFlow: all
-        FeedFlowAgent: all
-        FeedFlowBrowserWorker: all
-        FeedFlowShare: all
+        Crosscurrent: all
+        CrosscurrentAgent: all
+        CrosscurrentBrowserWorker: all
+        CrosscurrentShare: all
     run:
       config: Sandbox

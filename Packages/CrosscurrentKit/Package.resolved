@@ -1,0 +1,69 @@
+{
+  "originHash" : "f7ed9002b366edb2ff9c2d5abbcb29b5d48e0a2c8002dbe6bd4a072e4b8632d7",
+  "pins" : [
+    {
+      "identity" : "feedkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/nmdias/FeedKit.git",
+      "state" : {
+        "revision" : "e55b2cafaf67370092c91193cfb8a8b008e05888",
+        "version" : "10.4.0"
+      }
+    },
+    {
+      "identity" : "grdb.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/groue/GRDB.swift.git",
+      "state" : {
+        "revision" : "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+        "version" : "7.10.0"
+      }
+    },
+    {
+      "identity" : "numkong",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ashvardanian/NumKong",
+      "state" : {
+        "revision" : "1a26d12bf36bcbab86127e3c57b8a3655ed97f1c",
+        "version" : "7.8.0"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "b6496a74a087257ef5e6da1c5b29a447a60f5bd7",
+        "version" : "2.9.4"
+      }
+    },
+    {
+      "identity" : "swift-readability",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Ryu0118/swift-readability.git",
+      "state" : {
+        "revision" : "961453ade5b0fecdc5f3b0d562071cfc4b0603ea",
+        "version" : "0.3.0"
+      }
+    },
+    {
+      "identity" : "swiftsoup",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/scinfu/SwiftSoup.git",
+      "state" : {
+        "revision" : "8d6ad267714cac3ae747cefdd21f7a6665006e1f",
+        "version" : "2.13.7"
+      }
+    },
+    {
+      "identity" : "usearch",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/unum-cloud/USearch.git",
+      "state" : {
+        "revision" : "cc23bbaf21ef52313c5a495adbc40cbd733cdcfb",
+        "version" : "2.26.0"
+      }
+    }
+  ],
+  "version" : 3
+}
