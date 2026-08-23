@@ -24,6 +24,8 @@ settings:
     MARKETING_VERSION: 0.1.0
     GENERATE_INFOPLIST_FILE: false
   configs:
+    Debug:
+      CODE_SIGNING_ALLOWED: false
     Release:
       SWIFT_COMPILATION_MODE: wholemodule
       VALIDATE_PRODUCT: true
@@ -100,6 +102,8 @@ targets:
         product: CrosscurrentSearch
       - package: CrosscurrentKit
         product: CrosscurrentIPC
+      - package: CrosscurrentKit
+        product: CrosscurrentEmbeddingORT
       - package: Sparkle
         product: Sparkle
       - target: CrosscurrentShare

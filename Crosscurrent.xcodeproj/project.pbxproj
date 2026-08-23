@@ -17,12 +17,13 @@
 		465758B9EC4605D68A408D94 /* CrosscurrentIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = B85DF01AD8862ED260A5B029 /* CrosscurrentIntelligence */; };
 		4B3CB210A2307A5187B7919D /* ShareExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1963D6247F302A9D3FD528 /* ShareExtensionHandler.swift */; };
 		4DC9D5B2DEFDE0F1C0AC6F1C /* CrosscurrentStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 9A3D3359063168F938FE7994 /* CrosscurrentStorage */; };
-		4E3CFD158F7B6B73697B21F1 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A38EBCE4EECCBC13594D3045 /* Sparkle */; };
+		4E3CFD158F7B6B73697B21F1 /* CrosscurrentEmbeddingORT in Frameworks */ = {isa = PBXBuildFile; productRef = 9B9C7874C7726AF4A4299A71 /* CrosscurrentEmbeddingORT */; };
 		57864CFF309A91EDB5DC7632 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 9929BD1FB50B41990BF29A11 /* Localizable.strings */; };
 		589057F6C4B9A1B1B5BA99B5 /* CrosscurrentSearch in Frameworks */ = {isa = PBXBuildFile; productRef = B9CC7B2EF77847C47C7C37CB /* CrosscurrentSearch */; };
 		5DD31BAB8942A5CA4A67FA22 /* CrosscurrentDomain in Frameworks */ = {isa = PBXBuildFile; productRef = DE0AB5E8071261D4C00037DF /* CrosscurrentDomain */; };
 		67581BB7BEEB19647BF8389E /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E92D9A64B58B55103E28BC8 /* TodayView.swift */; };
 		6A5E313B29D05733F84B6F78 /* CrosscurrentDesignSystem in Frameworks */ = {isa = PBXBuildFile; productRef = 4F5EA216F27AE9625DA183FC /* CrosscurrentDesignSystem */; };
+		725321EE02581313D66A2503 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A38EBCE4EECCBC13594D3045 /* Sparkle */; };
 		761E3647F470ED7E2A8F9CA0 /* CrosscurrentSearch in Frameworks */ = {isa = PBXBuildFile; productRef = A9E3851A85F5D6E48735890A /* CrosscurrentSearch */; };
 		779303FA69D90F14060DB0F5 /* LibraryViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B84E6BF2D01F8C9AAAE994F /* LibraryViews.swift */; };
 		7B7030C3A57B2685611A3E77 /* AgentMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 984A802A36BBC846162B74EE /* AgentMain.swift */; };
@@ -48,7 +49,6 @@
 		EBE378177D7C8A2582FDE7DA /* CrosscurrentConnectors in Frameworks */ = {isa = PBXBuildFile; productRef = DD16C7E6769F0A69BD39D7A3 /* CrosscurrentConnectors */; };
 		EE911B03398F163A72DC2735 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E84B6068F8FCCC1AE522BAE /* RootView.swift */; };
 		F20F9E56CE9CA43E9A3D5A68 /* BrowserWorkerMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED000609D7E7DA9C30318637 /* BrowserWorkerMain.swift */; };
-		D11111111111111111111111 /* CrosscurrentEmbeddingORT in Frameworks */ = {isa = PBXBuildFile; productRef = D22222222222222222222222 /* CrosscurrentEmbeddingORT */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -148,8 +148,8 @@
 				465758B9EC4605D68A408D94 /* CrosscurrentIntelligence in Frameworks */,
 				589057F6C4B9A1B1B5BA99B5 /* CrosscurrentSearch in Frameworks */,
 				C1EF51F9E95F1542CCEDFE72 /* CrosscurrentIPC in Frameworks */,
-				D11111111111111111111111 /* CrosscurrentEmbeddingORT in Frameworks */,
-				4E3CFD158F7B6B73697B21F1 /* Sparkle in Frameworks */,
+				4E3CFD158F7B6B73697B21F1 /* CrosscurrentEmbeddingORT in Frameworks */,
+				725321EE02581313D66A2503 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -414,7 +414,7 @@
 				B85DF01AD8862ED260A5B029 /* CrosscurrentIntelligence */,
 				B9CC7B2EF77847C47C7C37CB /* CrosscurrentSearch */,
 				FB0E162357EF333A15BBF5B1 /* CrosscurrentIPC */,
-				D22222222222222222222222 /* CrosscurrentEmbeddingORT */,
+				9B9C7874C7726AF4A4299A71 /* CrosscurrentEmbeddingORT */,
 				A38EBCE4EECCBC13594D3045 /* Sparkle */,
 			);
 			productName = Crosscurrent;
@@ -919,6 +919,7 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
@@ -1219,6 +1220,10 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = CrosscurrentConnectors;
 		};
+		9B9C7874C7726AF4A4299A71 /* CrosscurrentEmbeddingORT */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CrosscurrentEmbeddingORT;
+		};
 		A38EBCE4EECCBC13594D3045 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 48C2A82DC4B77D922213A9F4 /* XCRemoteSwiftPackageReference "Sparkle" */;
@@ -1279,10 +1284,6 @@
 		FBE626A77EAA2EC6AEC9BF99 /* CrosscurrentBrowser */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CrosscurrentBrowser;
-		};
-		D22222222222222222222222 /* CrosscurrentEmbeddingORT */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = CrosscurrentEmbeddingORT;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -30,10 +30,12 @@ Run package tests:
 swift test --package-path Packages/CrosscurrentKit
 ```
 
-`Debug` and `Release` use the Developer-ID entitlement profiles. `Sandbox`
-uses target-specific sandbox profiles for the feasibility matrix. The final
-profile for each executable is selected only after its signed integration gate
-passes; Share Extension is always sandboxed.
+`Debug` is unsigned so the foreground app can build and run without a development
+certificate. `Release` uses the Developer-ID entitlement profiles, while `Sandbox`
+uses target-specific sandbox profiles for the feasibility matrix. App Group,
+Share Extension, and background Agent integration require a signed configuration.
+The final profile for each executable is selected only after its signed integration
+gate passes; Share Extension is always sandboxed.
 
 ## Acknowledgements
 
