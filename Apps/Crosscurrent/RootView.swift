@@ -2,7 +2,7 @@ import CrosscurrentDesignSystem
 import SwiftUI
 
 enum SidebarDestination: String, CaseIterable, Identifiable {
-    case today, flow, following, saved, search, eventDetail, itemDetail
+    case today, flow, following, saved, search, eventDetail, itemDetail, libraryDetail
     var id: String { rawValue }
     var title: LocalizedStringKey {
         switch self {
@@ -13,6 +13,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         case .search: "Search"
         case .eventDetail: "Event"
         case .itemDetail: "Item"
+        case .libraryDetail: "Detail"
         }
     }
     var symbol: String {
@@ -24,6 +25,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         case .search: "magnifyingglass"
         case .eventDetail: "doc.text.magnifyingglass"
         case .itemDetail: "doc.richtext"
+        case .libraryDetail: "info.circle"
         }
     }
 }
@@ -61,8 +63,8 @@ struct RootView: View {
         .navigationSplitViewStyle(.balanced)
         .onChange(of: model.focusReading) { _, focused in columnVisibility = focused ? .detailOnly : .all }
         .onExitCommand {
-            if model.focusReading { model.focusReading = false }
-            else if model.selection == .eventDetail { model.closeEvent() }
+            guard model.selection == .eventDetail else { return }
+            if model.handleReaderEscape() == .navigateBack { model.closeEvent() }
         }
     }
 
@@ -81,6 +83,7 @@ struct RootView: View {
         case .search: SearchScreen()
         case .eventDetail: EventDetailView()
         case .itemDetail: ItemDetailView()
+        case .libraryDetail: LibraryObjectDetailView()
         }
     }
 }

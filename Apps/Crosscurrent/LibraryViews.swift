@@ -3,6 +3,7 @@ import CrosscurrentDomain
 import CrosscurrentIngestion
 import CrosscurrentModels
 import CrosscurrentReader
+import CrosscurrentSearch
 import CrosscurrentStorage
 import SwiftUI
 import UniformTypeIdentifiers
@@ -15,27 +16,59 @@ enum FollowingFilter: String, CaseIterable, Identifiable {
     }
 }
 
-struct FollowingView: View {
-    @EnvironmentObject private var model: AppModel
+struct LibraryPageShell<Controls: View, Content: View>: View {
+    var pageTitle: LocalizedStringKey
+    var subtitle: LocalizedStringKey
+    var controls: Controls
+    var content: Content
+
+    init(
+        _ pageTitle: LocalizedStringKey,
+        subtitle: LocalizedStringKey,
+        @ViewBuilder controls: () -> Controls,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.pageTitle = pageTitle
+        self.subtitle = subtitle
+        self.controls = controls()
+        self.content = content()
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Following").font(.largeTitle.bold())
-                Text("Things I follow").foregroundStyle(.secondary)
-                Picker("Following", selection: $model.followingFilter) {
-                    ForEach(FollowingFilter.allCases) { Text($0.title).tag($0) }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(pageTitle).font(.largeTitle.bold())
+                    Text(subtitle).foregroundStyle(.secondary)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 420)
+                controls
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24).padding(.top, 22).padding(.bottom, 12)
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 14)
+            Divider()
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+}
 
+struct FollowingView: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        LibraryPageShell("Following", subtitle: "Things I follow") {
+            Picker("Following", selection: $model.followingFilter) {
+                ForEach(FollowingFilter.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 420)
+        } content: {
             switch model.followingFilter {
             case .all: AllFollowingView()
-            case .sources: SourcesView(embedded: true)
+            case .sources: SourcesView(embedded: true, followedOnly: true)
             case .people: PeopleView(embedded: true)
             case .topics: TopicsView(embedded: true)
             }
@@ -75,6 +108,7 @@ private struct AllFollowingView: View {
 
 struct SourcesView: View {
     var embedded = false
+    var followedOnly = false
     @EnvironmentObject private var model: AppModel
     @State private var adding = false
     @State private var url = ""
@@ -84,6 +118,9 @@ struct SourcesView: View {
     @State private var exportingOPML = false
     @State private var exportDocument = OPMLExportDocument(data: Data())
     @State private var selectedStarterURLs: Set<String> = []
+    private var visibleSources: [StoredSourceSnapshot] {
+        followedOnly ? model.sources.filter(\.source.isFollowed) : model.sources
+    }
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -114,9 +151,15 @@ struct SourcesView: View {
                     .padding(.bottom, 10)
                     .textSelection(.enabled)
             }
-            if model.sources.isEmpty { ContentUnavailableView("No Sources", systemImage: "dot.radiowaves.left.and.right", description: Text("Add a feed, creator profile, repository, publication, or webpage.")) }
+            if visibleSources.isEmpty {
+                ContentUnavailableView(
+                    followedOnly ? "No Followed Sources" : "No Sources",
+                    systemImage: "dot.radiowaves.left.and.right",
+                    description: Text(followedOnly ? "Sources you explicitly follow appear here." : "Add a feed, creator profile, repository, publication, or webpage.")
+                )
+            }
             else {
-                List(model.sources) { snapshot in
+                List(visibleSources) { snapshot in
                     HStack(spacing: 14) {
                         SourceMonogram(snapshot.revision.displayName, size: 34)
                         VStack(alignment: .leading, spacing: 4) {
@@ -331,12 +374,142 @@ private extension ConnectorHealth {
 struct PeopleView: View {
     var embedded = false
     @EnvironmentObject private var model: AppModel
-    var body: some View { VStack(spacing: 0) { if !embedded { title("People", subtitle: "People you can explicitly follow") }; if model.people.isEmpty { ContentUnavailableView("No People Yet", systemImage: "person.2") } else { List(model.people) { value in PersonRow(name: value.revision.displayName, aliases: value.aliases.map(\.value).joined(separator: " · "), endpoints: value.sourceNames.joined(separator: ", "), followed: value.entity.isFollowed) { model.setEntityFollowed(value, followed: !value.entity.isFollowed) }.listRowBackground(model.selectedLibraryStableID == value.id.description ? CrosscurrentColor.accent.opacity(0.12) : Color.clear) }.listStyle(.inset) } } }
+    private var followedPeople: [StoredEntitySnapshot] { model.people.filter(\.entity.isFollowed) }
+    var body: some View {
+        VStack(spacing: 0) {
+            if !embedded { title("People", subtitle: "People you explicitly follow") }
+            if followedPeople.isEmpty {
+                ContentUnavailableView("No Followed People", systemImage: "person.2", description: Text("People appear here only after you choose to follow them."))
+            } else {
+                List(followedPeople) { value in
+                    PersonRow(name: value.revision.displayName, aliases: value.aliases.map(\.value).joined(separator: " · "), endpoints: value.sourceNames.joined(separator: ", "), followed: true) { model.setEntityFollowed(value, followed: false) }
+                        .listRowBackground(model.selectedLibraryStableID == value.id.description ? CrosscurrentColor.accent.opacity(0.12) : Color.clear)
+                }.listStyle(.inset)
+            }
+        }
+    }
 }
 
 private struct PersonRow: View { var name: String; var aliases: String; var endpoints: String; var followed: Bool; var action: () -> Void; var body: some View { HStack { SourceMonogram(name, size: 38); VStack(alignment: .leading) { Text(name).font(.headline); if !aliases.isEmpty { Text(aliases).font(.caption).foregroundStyle(.secondary) }; if !endpoints.isEmpty { Text(endpoints).font(.caption).foregroundStyle(.secondary) } }; Spacer(); Button(followed ? "Following" : "Follow", action: action) } } }
 
-struct TopicsView: View { var embedded = false; @EnvironmentObject private var model: AppModel; var body: some View { VStack(spacing: 0) { if !embedded { title("Topics", subtitle: "Topics you can explicitly follow") }; if model.topics.isEmpty { ContentUnavailableView("No Topics Yet", systemImage: "number") } else { List(model.topics) { topic in HStack { Text("#").foregroundStyle(CrosscurrentColor.accent); Text(topic.revision.name).font(.headline); Spacer(); Text(String.localizedStringWithFormat(String(localized: "%lld Events"), topic.eventCount)).foregroundStyle(.secondary); Button(topic.topic.isFollowed ? "Following" : "Follow") { model.setTopicFollowed(topic, followed: !topic.topic.isFollowed) } }.listRowBackground(model.selectedLibraryStableID == topic.id.description ? CrosscurrentColor.accent.opacity(0.12) : Color.clear) } } } } }
+struct TopicsView: View {
+    var embedded = false
+    @EnvironmentObject private var model: AppModel
+    private var followedTopics: [StoredTopicSnapshot] { model.topics.filter(\.topic.isFollowed) }
+    var body: some View {
+        VStack(spacing: 0) {
+            if !embedded { title("Topics", subtitle: "Topics you explicitly follow") }
+            if followedTopics.isEmpty {
+                ContentUnavailableView("No Followed Topics", systemImage: "number", description: Text("Topics appear here only after you choose to follow them."))
+            } else {
+                List(followedTopics) { topic in
+                    HStack {
+                        Text("#").foregroundStyle(CrosscurrentColor.accent)
+                        Text(topic.revision.name).font(.headline)
+                        Spacer()
+                        Text(String.localizedStringWithFormat(String(localized: "%lld Events"), topic.eventCount)).foregroundStyle(.secondary)
+                        Button("Following") { model.setTopicFollowed(topic, followed: false) }
+                    }
+                    .listRowBackground(model.selectedLibraryStableID == topic.id.description ? CrosscurrentColor.accent.opacity(0.12) : Color.clear)
+                }
+            }
+        }
+    }
+}
+
+struct LibraryObjectDetailView: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        switch model.selectedLibraryResultKind {
+        case .person, .organization:
+            if let person = selectedPerson {
+                detail(
+                    title: person.revision.displayName,
+                    kind: person.entity.kind == .person ? "Person" : "Organization",
+                    summary: person.revision.summary,
+                    context: person.sourceNames,
+                    isFollowed: person.entity.isFollowed,
+                    action: { model.setEntityFollowed(person, followed: !person.entity.isFollowed) }
+                )
+            } else { missing }
+        case .topic:
+            if let topic = selectedTopic {
+                detail(
+                    title: topic.revision.name,
+                    kind: "Topic",
+                    summary: topic.revision.summary,
+                    context: [String.localizedStringWithFormat(String(localized: "%lld Events"), topic.eventCount)],
+                    isFollowed: topic.topic.isFollowed,
+                    action: { model.setTopicFollowed(topic, followed: !topic.topic.isFollowed) }
+                )
+            } else { missing }
+        case .source:
+            if let source = selectedSource {
+                detail(
+                    title: source.revision.displayName,
+                    kind: "Source",
+                    summary: source.revision.summary,
+                    context: source.endpoints.map { $0.connector.rawValue },
+                    isFollowed: source.source.isFollowed,
+                    action: { model.setSourceFollowed(source, followed: !source.source.isFollowed) }
+                )
+            } else { missing }
+        default:
+            missing
+        }
+    }
+
+    private var selectedPerson: StoredEntitySnapshot? {
+        model.people.first { $0.id.description == model.selectedLibraryStableID }
+    }
+
+    private var selectedTopic: StoredTopicSnapshot? {
+        model.topics.first { $0.id.description == model.selectedLibraryStableID }
+    }
+
+    private var selectedSource: StoredSourceSnapshot? {
+        model.sources.first { $0.id.description == model.selectedLibraryStableID }
+    }
+
+    private var missing: some View {
+        ContentUnavailableView("Detail Unavailable", systemImage: "questionmark.circle", description: Text("This result is no longer available in the current library."))
+    }
+
+    private func detail(
+        title: String,
+        kind: LocalizedStringKey,
+        summary: String?,
+        context: [String],
+        isFollowed: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 16) {
+                    SourceMonogram(title, size: 52)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(kind).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(title).font(.system(size: 34, weight: .bold, design: .serif))
+                    }
+                    Spacer()
+                    Button(isFollowed ? "Following" : "Follow", action: action)
+                }
+                if let summary, !summary.isEmpty { Text(summary).font(.body).lineSpacing(3) }
+                if !context.isEmpty {
+                    Divider()
+                    Text(context.joined(separator: " · ")).foregroundStyle(.secondary)
+                }
+                Text("Following is an explicit interest signal. Linked Sources and inferred entities remain independent unless you follow them separately.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(28)
+        }
+        .navigationTitle(title)
+    }
+}
 
 struct ItemDetailView: View {
     @EnvironmentObject private var model: AppModel
@@ -377,10 +550,11 @@ struct SavedView: View {
     private var savedEvents: [EventCardModel] { model.events.filter { model.savedEventIDs.contains($0.id) } }
 
     var body: some View {
-        VStack(spacing: 0) {
-            title("Saved", subtitle: "Articles, Events, tags, and smart collections")
+        LibraryPageShell("Saved", subtitle: "Stories and articles you want to keep") {
+            EmptyView()
+        } content: {
             if savedEvents.isEmpty {
-                ContentUnavailableView("Nothing Saved", systemImage: "bookmark", description: Text("Save an Event from Flow or Event Detail. Saved references follow the stable Event while preserving revision history."))
+                ContentUnavailableView("Nothing Saved", systemImage: "bookmark", description: Text("Save stories and articles to read or revisit later."))
             } else {
                 List(savedEvents) { event in
                     HStack(alignment: .top, spacing: 12) {

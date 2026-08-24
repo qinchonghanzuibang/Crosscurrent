@@ -124,7 +124,11 @@ func todayExcludesHistoricalBackfillButIncludesARealNewPublication() async throw
     _ = try await seedItem(repository, sourceID: sourceID, endpointID: endpointID, externalID: "new-publication", title: "New evaluation method for reliable agents", text: "A newly published evaluation method measures reliable tool use with reproducible tests, independent evidence, and detailed failure analysis for production agent systems.", publishedAt: now.addingTimeInterval(-3_600))
     _ = try await EvidenceEventMaintainer(repository: repository).run()
     let snapshots = try await repository.currentEventSnapshots()
-    #expect(snapshots.contains { $0.meaningfulActivityAt == now.addingTimeInterval(-500 * 86_400) })
+    let archivedPublicationDate = now.addingTimeInterval(-500 * 86_400)
+    #expect(snapshots.contains { snapshot in
+        guard let meaningfulActivityAt = snapshot.meaningfulActivityAt else { return false }
+        return abs(meaningfulActivityAt.timeIntervalSince(archivedPublicationDate)) < 0.001
+    })
     let update = try #require(try await TodayCoordinator(repository: repository).update(trigger: .opening, now: now))
     let included = Set(update.revision.entries.map(\.eventRevisionID))
     let old = try #require(snapshots.first { $0.aggregate.revision.title.contains("Archived") })

@@ -95,6 +95,7 @@ final class AppModel: ObservableObject {
     @Published var selectedEventID: EventID?
     @Published var selectedItemDetail: StoredItemDetail?
     @Published var selectedLibraryStableID: String?
+    @Published var selectedLibraryResultKind: SearchDocumentKind?
     @Published var presentsAddSource = false
     @Published var events: [EventCardModel] = []
     @Published var digestSections: [DigestSection: [EventCardModel]] = [:]
@@ -125,7 +126,7 @@ final class AppModel: ObservableObject {
     @Published var rawRetentionPolicy = RawRetentionPolicy()
     @Published var localDataUsage: LocalDataUsage?
     @Published var dataStorageStatus = ""
-    @Published var focusReading = false
+    @Published var readerExperience = ReaderExperienceState()
     @Published var followingFilter: FollowingFilter = .all
 
     private(set) var repository: CrosscurrentRepository?
@@ -276,11 +277,32 @@ final class AppModel: ObservableObject {
     }
 
     func closeEvent() {
-        focusReading = false
+        readerExperience = ReaderExperienceState()
         selection = destinationBeforeEvent
     }
 
-    func toggleFocusReading() { focusReading.toggle() }
+    var focusReading: Bool { readerExperience.isFocusReading }
+    var readerInsights: ReaderInsightsState? { readerExperience.insights }
+
+    func toggleFocusReading() { readerExperience.isFocusReading.toggle() }
+
+    func presentReaderInsights(_ state: ReaderInsightsState) {
+        readerExperience.insights = state
+    }
+
+    func updateReaderInsights(_ state: ReaderInsightsState) {
+        guard readerExperience.insights?.id == state.id else { return }
+        readerExperience.insights = state
+    }
+
+    func dismissReaderInsights() {
+        readerExperience.insights = nil
+    }
+
+    @discardableResult
+    func handleReaderEscape() -> ReaderEscapeAction {
+        readerExperience.handleEscape()
+    }
 
     func refreshLocalDataUsage() {
         guard let databaseLocations else { return }
@@ -379,16 +401,16 @@ final class AppModel: ObservableObject {
             } catch { startupError = error.localizedDescription }
         case .source:
             selectedLibraryStableID = result.stableID
-            followingFilter = .sources
-            selection = .following
+            selectedLibraryResultKind = result.kind
+            selection = .libraryDetail
         case .person, .organization:
             selectedLibraryStableID = result.stableID
-            followingFilter = .people
-            selection = .following
+            selectedLibraryResultKind = result.kind
+            selection = .libraryDetail
         case .topic:
             selectedLibraryStableID = result.stableID
-            followingFilter = .topics
-            selection = .following
+            selectedLibraryResultKind = result.kind
+            selection = .libraryDetail
         }
     }
 

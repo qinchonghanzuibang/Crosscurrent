@@ -1790,6 +1790,10 @@ public actor CrosscurrentRepository {
         }
     }
 
+    public func followedSourceSnapshots() throws -> [StoredSourceSnapshot] {
+        try sourceSnapshots().filter(\.source.isFollowed)
+    }
+
     public func sourceFolderSnapshots() throws -> [StoredSourceFolderSnapshot] {
         try database.pool.read { db in
             try Row.fetchAll(db, sql: "SELECT * FROM source_folders ORDER BY sort_order, name").map { row in
@@ -1834,6 +1838,10 @@ public actor CrosscurrentRepository {
         }
     }
 
+    public func followedEntitySnapshots() throws -> [StoredEntitySnapshot] {
+        try entitySnapshots().filter(\.entity.isFollowed)
+    }
+
     public func topicSnapshots() throws -> [StoredTopicSnapshot] {
         try database.pool.read { db in
             try Row.fetchAll(db, sql: "SELECT t.*, r.id AS revision_id, r.name, r.summary, r.created_at, (SELECT COUNT(DISTINCT a.event_revision_id) FROM event_topic_assertions a WHERE a.topic_id=t.id) AS event_count FROM topics t JOIN topic_revisions r ON r.id=t.current_revision_id ORDER BY r.name").map { row in
@@ -1841,6 +1849,10 @@ public actor CrosscurrentRepository {
                 return StoredTopicSnapshot(topic: Topic(id: id, currentRevisionID: revisionID, isFollowed: row["is_followed"]), revision: TopicRevision(id: revisionID, topicID: id, name: row["name"], summary: row["summary"], createdAt: Date(timeIntervalSince1970: row["created_at"])), eventCount: row["event_count"])
             }
         }
+    }
+
+    public func followedTopicSnapshots() throws -> [StoredTopicSnapshot] {
+        try topicSnapshots().filter(\.topic.isFollowed)
     }
 
     @discardableResult

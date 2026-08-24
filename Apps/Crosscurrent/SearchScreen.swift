@@ -13,13 +13,12 @@ struct SearchScreen: View {
     @State private var searching = false
 
     var body: some View {
-        VStack(spacing: 0) {
+        LibraryPageShell("Search", subtitle: "Find stories, sources, people, and topics") {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Search").font(.largeTitle.bold())
                 HStack { Image(systemName: "magnifyingglass"); TextField("Items, Events, Sources, People, organizations, Topics", text: $query).textFieldStyle(.plain).font(.title3); Toggle("History", isOn: $includeHistory).toggleStyle(.button) }.padding(12).background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
                 Picker("Facet", selection: $facet) { ForEach(["All", "Events", "People", "Sources", "Topics"], id: \.self, content: Text.init) }.pickerStyle(.segmented).frame(maxWidth: 500)
-            }.padding(24)
-            Divider()
+            }
+        } content: {
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ContentUnavailableView("Search Crosscurrent", systemImage: "magnifyingglass", description: Text("Search current Items, Events, Sources, People, organizations, and Topics. History is opt-in."))
             } else if searching {

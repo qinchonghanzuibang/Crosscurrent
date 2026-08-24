@@ -22,6 +22,22 @@ private func maliciousArticleFixture() -> String {
     """
 }
 
+@Test func readerInsightsUseCompleteArticleBlocksInsteadOfNavigationOrClippedExcerpts() {
+    let text = ReaderTextExtractor.plainText(fromSanitizedHTML: """
+        <nav>Unrelated navigation sentence that should be excluded.</nav>
+        <article>
+          <h1>Harness Engineering for Self-Improvement</h1>
+          <p>The concept of recursive self-improvement dates back to I. J. Good (1965), who defined an ultratelligent machine.</p>
+          <p>Modern harnesses improve the deployment system around a model while preserving a measurable evaluation loop.</p>
+        </article>
+        <footer>Unrelated footer sentence that should be excluded.</footer>
+        """)
+    #expect(text.contains("I. J. Good (1965)"))
+    #expect(text.contains("Modern harnesses"))
+    #expect(!text.contains("Unrelated navigation"))
+    #expect(!text.contains("Unrelated footer"))
+}
+
 @Test
 func sourceHTMLIsMadeInertBeforeAnyJavaScriptRuntime() throws {
     let inert = try StaticHTMLPreprocessor.inertDocument(from: maliciousArticleFixture(), baseURL: URL(string: "https://example.com/article"))
