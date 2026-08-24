@@ -86,6 +86,17 @@ public final class CrosscurrentDatabase: @unchecked Sendable {
             try db.execute(sql: "VACUUM INTO ?", arguments: [backup.path])
         }
     }
+
+    @discardableResult
+    public func createUserBackup() throws -> URL {
+        let formatter = ISO8601DateFormatter()
+        let timestamp = formatter.string(from: .now).replacingOccurrences(of: ":", with: "-")
+        let backup = locations.backups.appending(path: "Crosscurrent-\(timestamp).sqlite")
+        try pool.writeWithoutTransaction { db in
+            try db.execute(sql: "VACUUM INTO ?", arguments: [backup.path])
+        }
+        return backup
+    }
 }
 
 private enum MigrationFileLock {

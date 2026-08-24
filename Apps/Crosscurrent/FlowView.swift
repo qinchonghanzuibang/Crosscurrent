@@ -77,6 +77,9 @@ private struct FlowEventRow: View {
         case .novelDevelopment: String(localized: "New development")
         case .chinaGlobalCoverage: String(localized: "Cross-ecosystem")
         case .savedRelationship: String(localized: "Related to saved")
+        case .freshPublication: String(localized: "Fresh publication")
+        case .materialUpdate: String(localized: "Material update")
+        case .readingValue: String(localized: "Worth reading")
         }
     }
 

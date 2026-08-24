@@ -7,7 +7,74 @@ import CrosscurrentStorage
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum FollowingFilter: String, CaseIterable, Identifiable {
+    case all, sources, people, topics
+    var id: String { rawValue }
+    var title: LocalizedStringKey {
+        switch self { case .all: "All"; case .sources: "Sources"; case .people: "People"; case .topics: "Topics" }
+    }
+}
+
+struct FollowingView: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Following").font(.largeTitle.bold())
+                Text("Things I follow").foregroundStyle(.secondary)
+                Picker("Following", selection: $model.followingFilter) {
+                    ForEach(FollowingFilter.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 420)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24).padding(.top, 22).padding(.bottom, 12)
+
+            switch model.followingFilter {
+            case .all: AllFollowingView()
+            case .sources: SourcesView(embedded: true)
+            case .people: PeopleView(embedded: true)
+            case .topics: TopicsView(embedded: true)
+            }
+        }
+    }
+}
+
+private struct AllFollowingView: View {
+    @EnvironmentObject private var model: AppModel
+    var body: some View {
+        let sources = model.sources.filter(\.source.isFollowed)
+        let people = model.people.filter(\.entity.isFollowed)
+        let topics = model.topics.filter(\.topic.isFollowed)
+        if sources.isEmpty && people.isEmpty && topics.isEmpty {
+            ContentUnavailableView("Nothing Followed Yet", systemImage: "person.crop.circle.badge.plus", description: Text("Follow a Source, person, or Topic to see it here."))
+        } else {
+            List {
+                if !sources.isEmpty {
+                    Section("Sources") { ForEach(sources) { source in
+                        HStack { SourceMonogram(source.revision.displayName, size: 30); Text(source.revision.displayName); Spacer(); Text(source.endpoints.first?.connector.rawValue ?? "").font(.caption).foregroundStyle(.secondary) }
+                    } }
+                }
+                if !people.isEmpty {
+                    Section("People") { ForEach(people) { person in
+                        HStack { SourceMonogram(person.revision.displayName, size: 30); Text(person.revision.displayName); Spacer(); Text(person.sourceNames.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    } }
+                }
+                if !topics.isEmpty {
+                    Section("Topics") { ForEach(topics) { topic in
+                        HStack { Text("#").foregroundStyle(CrosscurrentColor.accent); Text(topic.revision.name); Spacer(); Text(String.localizedStringWithFormat(String(localized: "%lld Events"), topic.eventCount)).font(.caption).foregroundStyle(.secondary) }
+                    } }
+                }
+            }.listStyle(.inset)
+        }
+    }
+}
+
 struct SourcesView: View {
+    var embedded = false
     @EnvironmentObject private var model: AppModel
     @State private var adding = false
     @State private var url = ""
@@ -20,9 +87,11 @@ struct SourcesView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                VStack(alignment: .leading) {
-                    Text("Sources").font(.largeTitle.bold())
-                    Text("Logical Sources with connector endpoints").foregroundStyle(.secondary)
+                if !embedded {
+                    VStack(alignment: .leading) {
+                        Text("Sources").font(.largeTitle.bold())
+                        Text("Feeds, publications, repositories, and webpages").foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 Button("Import OPML…", systemImage: "square.and.arrow.down") { importingOPML = true }
@@ -35,7 +104,7 @@ struct SourcesView: View {
                     }
                 }
                 Button { model.presentsAddSource = true } label: { Image(systemName: "plus") }
-            }.padding(24)
+            }.padding(.horizontal, 24).padding(.vertical, embedded ? 10 : 24)
             if !status.isEmpty {
                 Text(status)
                     .font(.caption)
@@ -53,22 +122,20 @@ struct SourcesView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(snapshot.revision.displayName).font(.headline)
                             Text("\(snapshot.source.kind.displayName) · \(snapshot.endpoints.map { $0.connector.rawValue }.joined(separator: " · "))").font(.caption).foregroundStyle(.secondary)
-                            HStack {
-                                if let policy = snapshot.aiClassification { StatusPill("\(policy.accessRequirement.displayName) · \(policy.contentPrivacy.displayName)", color: .secondary) }
-                                StatusPill(snapshot.coverage?.ecosystem.displayName ?? CoverageEcosystem.unknown.displayName, color: .secondary)
-                            }
                         }
                         Spacer()
                         VStack(alignment: .trailing, spacing: 8) {
-                            StatusPill(snapshot.endpoints.first?.health.displayName ?? String(localized: "No endpoint"), color: snapshot.endpoints.allSatisfy { $0.health == .healthy } ? .green : .orange)
                             if let endpoint = snapshot.endpoints.first,
                                let health = model.endpointHealth[endpoint.id] {
                                 Text(endpointHealthSummary(health))
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                     .multilineTextAlignment(.trailing)
-                                if let message = health.lastFailureMessage, health.health != .healthy {
+                                if let message = health.lastFailureMessage, [.authenticationRequired, .platformChanged, .error, .temporarilyUnavailable].contains(health.health) {
                                     Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+                                }
+                                if [.authenticationRequired, .platformChanged, .error, .temporarilyUnavailable].contains(health.health) {
+                                    StatusPill(health.health.displayName, color: .orange)
                                 }
                             }
                             HStack(spacing: 8) {
@@ -78,17 +145,16 @@ struct SourcesView: View {
                                 if let endpoint = snapshot.endpoints.first(where: { $0.health == .authenticationRequired || $0.health == .platformChanged }) {
                                     Button("Reconnect") { Task { await model.reconnect(endpoint) } }
                                 }
-                                if let endpoint = snapshot.endpoints.first(where: { $0.accountID != nil }) {
-                                    Menu("Session") {
+                                Menu {
+                                    if let endpoint = snapshot.endpoints.first(where: { $0.accountID != nil }) {
                                         Button("Capture redacted diagnostic") { Task { await model.capturePlatformDiagnostic(endpoint) } }
                                         Button("Remove browser session", role: .destructive) { Task { await model.removeBrowserSession(endpoint) } }
                                     }
-                                }
-                                Menu(snapshot.coverage?.ecosystem.displayName ?? String(localized: "Unknown coverage")) {
+                                    Divider()
                                     ForEach(CoverageEcosystem.allCases, id: \.self) { ecosystem in
-                                        Button(ecosystem.displayName) { model.setCoverage(snapshot, ecosystem: ecosystem) }
+                                        Button("Coverage: \(ecosystem.displayName)") { model.setCoverage(snapshot, ecosystem: ecosystem) }
                                     }
-                                }
+                                } label: { Image(systemName: "ellipsis.circle") }
                                 Button(snapshot.source.isFollowed ? "Following" : "Follow") { model.setSourceFollowed(snapshot, followed: !snapshot.source.isFollowed) }
                             }.controlSize(.small)
                             if let endpoint = snapshot.endpoints.first,
@@ -210,12 +276,12 @@ struct SourcesView: View {
 }
 
 private func endpointHealthSummary(_ health: StoredEndpointHealth) -> String {
-    var parts = [String.localizedStringWithFormat(String(localized: "%lld Items"), health.itemCount)]
     let formatter = RelativeDateTimeFormatter()
-    if let success = health.lastSuccess { parts.append("Last success \(formatter.localizedString(for: success, relativeTo: .now))") }
-    else if let attempt = health.lastAttempt { parts.append("Last attempt \(formatter.localizedString(for: attempt, relativeTo: .now))") }
-    if let retry = health.nextRetry { parts.append("Retry \(formatter.localizedString(for: retry, relativeTo: .now))") }
-    if let cursor = health.cursorFamily { parts.append(cursor) }
+    var parts: [String] = []
+    if let success = health.lastSuccess { parts.append("Last synced \(formatter.localizedString(for: success, relativeTo: .now))") }
+    else if let attempt = health.lastAttempt { parts.append("Last tried \(formatter.localizedString(for: attempt, relativeTo: .now))") }
+    if health.health == .retrying || health.health == .rateLimited { parts.append(String(localized: "Retrying…")) }
+    parts.append(String.localizedStringWithFormat(String(localized: "%lld Items"), health.itemCount))
     return parts.joined(separator: " · ")
 }
 
@@ -251,6 +317,7 @@ private extension ConnectorHealth {
         switch self {
         case .healthy: String(localized: "Healthy")
         case .syncing: String(localized: "Syncing")
+        case .retrying: String(localized: "Retrying")
         case .authenticationRequired: String(localized: "Authentication required")
         case .rateLimited: String(localized: "Rate limited")
         case .temporarilyUnavailable: String(localized: "Temporarily unavailable")
@@ -262,13 +329,14 @@ private extension ConnectorHealth {
 }
 
 struct PeopleView: View {
+    var embedded = false
     @EnvironmentObject private var model: AppModel
-    var body: some View { VStack(spacing: 0) { title("People", subtitle: "Entities, aliases, and all linked Sources"); if model.people.isEmpty { ContentUnavailableView("No People Yet", systemImage: "person.2") } else { List(model.people) { value in PersonRow(name: value.revision.displayName, aliases: value.aliases.map(\.value).joined(separator: " · "), endpoints: value.sourceNames.joined(separator: ", "), followed: value.entity.isFollowed) { model.setEntityFollowed(value, followed: !value.entity.isFollowed) }.listRowBackground(model.selectedLibraryStableID == value.id.description ? CrosscurrentColor.accent.opacity(0.12) : Color.clear) }.listStyle(.inset) } } }
+    var body: some View { VStack(spacing: 0) { if !embedded { title("People", subtitle: "People you can explicitly follow") }; if model.people.isEmpty { ContentUnavailableView("No People Yet", systemImage: "person.2") } else { List(model.people) { value in PersonRow(name: value.revision.displayName, aliases: value.aliases.map(\.value).joined(separator: " · "), endpoints: value.sourceNames.joined(separator: ", "), followed: value.entity.isFollowed) { model.setEntityFollowed(value, followed: !value.entity.isFollowed) }.listRowBackground(model.selectedLibraryStableID == value.id.description ? CrosscurrentColor.accent.opacity(0.12) : Color.clear) }.listStyle(.inset) } } }
 }
 
 private struct PersonRow: View { var name: String; var aliases: String; var endpoints: String; var followed: Bool; var action: () -> Void; var body: some View { HStack { SourceMonogram(name, size: 38); VStack(alignment: .leading) { Text(name).font(.headline); if !aliases.isEmpty { Text(aliases).font(.caption).foregroundStyle(.secondary) }; if !endpoints.isEmpty { Text(endpoints).font(.caption).foregroundStyle(.secondary) } }; Spacer(); Button(followed ? "Following" : "Follow", action: action) } } }
 
-struct TopicsView: View { @EnvironmentObject private var model: AppModel; var body: some View { VStack(spacing: 0) { title("Topics", subtitle: "Revisioned assertions from Items and Events"); if model.topics.isEmpty { ContentUnavailableView("No Topics Yet", systemImage: "number") } else { List(model.topics) { topic in HStack { Text("#").foregroundStyle(CrosscurrentColor.accent); Text(topic.revision.name).font(.headline); Spacer(); Text(String.localizedStringWithFormat(String(localized: "%lld Events"), topic.eventCount)).foregroundStyle(.secondary); Button(topic.topic.isFollowed ? "Following" : "Follow") { model.setTopicFollowed(topic, followed: !topic.topic.isFollowed) } }.listRowBackground(model.selectedLibraryStableID == topic.id.description ? CrosscurrentColor.accent.opacity(0.12) : Color.clear) } } } } }
+struct TopicsView: View { var embedded = false; @EnvironmentObject private var model: AppModel; var body: some View { VStack(spacing: 0) { if !embedded { title("Topics", subtitle: "Topics you can explicitly follow") }; if model.topics.isEmpty { ContentUnavailableView("No Topics Yet", systemImage: "number") } else { List(model.topics) { topic in HStack { Text("#").foregroundStyle(CrosscurrentColor.accent); Text(topic.revision.name).font(.headline); Spacer(); Text(String.localizedStringWithFormat(String(localized: "%lld Events"), topic.eventCount)).foregroundStyle(.secondary); Button(topic.topic.isFollowed ? "Following" : "Follow") { model.setTopicFollowed(topic, followed: !topic.topic.isFollowed) } }.listRowBackground(model.selectedLibraryStableID == topic.id.description ? CrosscurrentColor.accent.opacity(0.12) : Color.clear) } } } } }
 
 struct ItemDetailView: View {
     @EnvironmentObject private var model: AppModel

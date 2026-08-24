@@ -5,10 +5,11 @@ import SwiftUI
 
 struct TodayView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var everythingExpanded = false
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 24) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 masthead
                 if model.events.isEmpty {
                     VStack(spacing: 14) {
@@ -17,7 +18,7 @@ struct TodayView: View {
                             systemImage: "newspaper",
                             description: Text("Add or refresh Sources to build your first evidence-backed daily briefing.")
                         )
-                        Button("Add a Source") { model.selection = .sources }
+                        Button("Add a Source") { model.selection = .following; model.followingFilter = .sources }
                             .buttonStyle(.borderedProminent)
                     }
                     .frame(maxWidth: .infinity)
@@ -38,18 +39,26 @@ struct TodayView: View {
                         }
                     }
                     optionalSection("Emerging", events: section(.emerging))
-                    optionalSection("From People You Follow", events: section(.peopleYouFollow))
+                    optionalSection("From Your Follows", events: section(.peopleYouFollow))
                     optionalSection("Worth Reading", events: section(.worthReading))
                     if !section(.chinaGlobal).isEmpty {
                         SectionRule("China ↔ Global", trailing: "Evidence-qualified comparison")
                         compactRows(section(.chinaGlobal))
                     }
-                    optionalSection("Everything Else", events: section(.everythingElse))
+                    let remaining = section(.everythingElse)
+                    if !remaining.isEmpty {
+                        DisclosureGroup(isExpanded: $everythingExpanded) {
+                            compactRows(remaining)
+                        } label: {
+                            Text("Everything Else · \(remaining.count)").font(.title3.bold())
+                        }
+                        .padding(.top, 4)
+                    }
                 }
             }
-            .padding(.horizontal, 34)
-            .padding(.vertical, 28)
-            .frame(maxWidth: 1040, alignment: .leading)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
+            .frame(maxWidth: 900, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .background(Color(nsColor: .textBackgroundColor))
@@ -63,7 +72,7 @@ struct TodayView: View {
             Text(model.digestUpdatedAt.formatted(.dateTime.weekday(.wide).month(.wide).day().year()))
                 .font(.caption.weight(.semibold)).textCase(.uppercase).tracking(1.6).foregroundStyle(CrosscurrentColor.accent)
             HStack(alignment: .lastTextBaseline) {
-                Text("Today").font(.system(size: 48, weight: .black, design: .serif)).tracking(-1.8)
+                Text("Today").font(.system(size: 40, weight: .black, design: .serif)).tracking(-1.4)
                 Spacer()
                 VStack(alignment: .trailing, spacing: 3) {
                     Text(model.digestRevisionReason == .initialDaily ? "Daily snapshot" : "Updated briefing").font(.subheadline.weight(.semibold))
@@ -86,6 +95,11 @@ struct TodayView: View {
                         Text(event.title).font(.headline).foregroundStyle(.primary).multilineTextAlignment(.leading)
                         Spacer()
                         Text(event.primarySource).font(.caption).foregroundStyle(.secondary)
+                        Menu {
+                            Text("Why here?")
+                            ForEach(event.reasons, id: \.self) { Text(reasonLabel($0)) }
+                        } label: { Image(systemName: "info.circle").foregroundStyle(.secondary) }
+                        .menuStyle(.borderlessButton)
                     }.padding(.vertical, 11)
                 }
                 .buttonStyle(.plain)
@@ -109,6 +123,23 @@ struct TodayView: View {
 
     private static func leadEventCount(_ count: Int) -> String {
         String.localizedStringWithFormat(String(localized: "%lld lead events"), count)
+    }
+
+    private func reasonLabel(_ reason: RankingReason) -> String {
+        switch reason {
+        case .followedSource: "From a Source you follow"
+        case .followedPerson: "From a person you follow"
+        case .followedTopic: "Matches a Topic you follow"
+        case .primarySource: "Strong primary evidence"
+        case .independentCoverage: "Independent coverage"
+        case .rapidGrowth: "Coverage is accelerating"
+        case .novelDevelopment: "Material new development"
+        case .chinaGlobalCoverage: "Evidence across ecosystems"
+        case .savedRelationship: "Related to something saved"
+        case .freshPublication: "Fresh publication"
+        case .materialUpdate: "Material update"
+        case .readingValue: "Substantial primary reading"
+        }
     }
 }
 

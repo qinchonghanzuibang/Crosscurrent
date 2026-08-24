@@ -19,11 +19,15 @@ public protocol ConnectorHTTPClient: Sendable {
 }
 
 public struct URLSessionConnectorHTTPClient: ConnectorHTTPClient {
+    private static let hostGate = HostRequestGate()
     private let session: URLSession
 
     public init(session: URLSession = .shared) { self.session = session }
 
     public func get(_ url: URL, headers: [String: String] = [:]) async throws -> ConnectorHTTPResponse {
+        let host = url.host?.lowercased() ?? url.absoluteString
+        await Self.hostGate.acquire(host)
+        defer { Task { await Self.hostGate.release(host) } }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 30
@@ -35,8 +39,11 @@ public struct URLSessionConnectorHTTPClient: ConnectorHTTPClient {
         }
         if http.statusCode == 401 || http.statusCode == 403 { throw ConnectorError.authenticationRequired }
         if http.statusCode == 429 {
-            let retry = http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+            let retry = Self.retryAfter(http.value(forHTTPHeaderField: "Retry-After"))
             throw ConnectorError.rateLimited(retryAfter: retry)
+        }
+        if [502, 503, 504].contains(http.statusCode) {
+            throw ConnectorError.transientHTTP(statusCode: http.statusCode, retryAfter: Self.retryAfter(http.value(forHTTPHeaderField: "Retry-After")))
         }
         guard (200..<300).contains(http.statusCode) || http.statusCode == 304 else {
             throw ConnectorError.invalidResponse("HTTP \(http.statusCode)")
@@ -45,5 +52,38 @@ public struct URLSessionConnectorHTTPClient: ConnectorHTTPClient {
             output[String(describing: pair.key)] = String(describing: pair.value)
         }
         return ConnectorHTTPResponse(data: data, statusCode: http.statusCode, headers: responseHeaders, finalURL: finalURL)
+    }
+
+    private static func retryAfter(_ value: String?) -> TimeInterval? {
+        guard let value else { return nil }
+        if let seconds = TimeInterval(value.trimmingCharacters(in: .whitespaces)), seconds >= 0 { return seconds }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        for format in ["EEE',' dd MMM yyyy HH':'mm':'ss z", "EEEE',' dd-MMM-yy HH':'mm':'ss z", "EEE MMM d HH':'mm':'ss yyyy"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: value) { return max(0, date.timeIntervalSinceNow) }
+        }
+        return nil
+    }
+}
+
+private actor HostRequestGate {
+    private var occupied: Set<String> = []
+    private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    func acquire(_ host: String) async {
+        if occupied.insert(host).inserted { return }
+        await withCheckedContinuation { waiters[host, default: []].append($0) }
+    }
+
+    func release(_ host: String) {
+        if var queue = waiters[host], !queue.isEmpty {
+            let next = queue.removeFirst()
+            waiters[host] = queue.isEmpty ? nil : queue
+            next.resume()
+        } else {
+            occupied.remove(host)
+        }
     }
 }

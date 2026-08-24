@@ -14,6 +14,8 @@ struct SettingsView: View {
     @State private var providerModel = "qwen3:4b"
     @State private var providerSecret = ""
     @State private var providerStatus = ""
+    @State private var confirmsCacheClear = false
+    @State private var confirmsDeleteAll = false
 
     var body: some View {
         TabView(selection: $tab) {
@@ -41,6 +43,11 @@ struct SettingsView: View {
                 }
                 Button("Add briefing time", systemImage: "plus") { Task { await model.addAdditionalBriefing() } }
                 LabeledContent("Background Agent", value: model.backgroundState)
+                if model.backgroundState == String(localized: "Foreground refresh only") {
+                    Text("Crosscurrent remains fully usable and refreshes while open. Closed-app refresh and notifications require a signed, enabled Background Agent.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 HStack { Button("Enable Agent") { enableAgent() }; Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() } }
                 LabeledContent("Authenticated Browser Sessions", value: model.browserWorkerState)
                 Button("Enable Browser Session Owner") { enableBrowserWorker() }
@@ -149,7 +156,59 @@ struct SettingsView: View {
                 Text("Normalized revisions and evidence spans remain durable. Remote deletion retains permitted evidence; legal and connector-mandated purges remove content immediately and leave only permitted tombstones.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding().tabItem { Label("Retention", systemImage: "externaldrive") }.tag("Retention")
+            Form {
+                if let usage = model.localDataUsage {
+                    Section {
+                        LabeledContent("Total local data", value: format(usage.totalBytes))
+                        LabeledContent("Articles & Media", value: format(usage.articlesAndMediaBytes))
+                        LabeledContent("Search Index", value: format(usage.searchIndexBytes))
+                        LabeledContent("Local AI Model", value: format(usage.localModelBytes))
+                        LabeledContent("Backups", value: format(usage.backupsBytes))
+                    }
+                    Section("Storage location") {
+                        if usage.isDevelopment {
+                            Label("Development Data", systemImage: "hammer")
+                                .font(.subheadline.weight(.semibold))
+                            Text("Unsigned builds keep their data separately from signed release builds.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text(usage.location.path)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Button("Open Data Folder", systemImage: "folder") { model.openDataFolder() }
+                    }
+                    Section("Maintenance") {
+                        Button("Back Up Now", systemImage: "externaldrive.badge.plus") { Task { await model.backUpNow() } }
+                        Button("Rebuild Search Index", systemImage: "magnifyingglass") { Task { await model.rebuildSearchIndex() } }
+                        Button("Clear Rebuildable Cache…", systemImage: "arrow.triangle.2.circlepath") { confirmsCacheClear = true }
+                        Button("Delete All Local Data…", systemImage: "trash", role: .destructive) { confirmsDeleteAll = true }
+                        if !model.dataStorageStatus.isEmpty {
+                            Text(model.dataStorageStatus).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    ProgressView("Reading local data usage…")
+                }
+            }
+            .padding()
+            .task { model.refreshLocalDataUsage() }
+            .confirmationDialog("Clear rebuildable cache?", isPresented: $confirmsCacheClear) {
+                Button("Clear Cache", role: .destructive) { Task { await model.clearRebuildableCache() } }
+            } message: {
+                Text("Articles and reading history remain. Search and local intelligence indexes will be rebuilt.")
+            }
+            .confirmationDialog("Delete all local Crosscurrent data?", isPresented: $confirmsDeleteAll) {
+                Button("Delete All Local Data", role: .destructive) { model.deleteAllLocalData() }
+            } message: {
+                Text("Crosscurrent will quit and remove this data root on the next launch. This cannot be undone unless you have a backup.")
+            }
+            .tabItem { Label("Data & Storage", systemImage: "internaldrive") }.tag("Data")
         }
+    }
+
+    private func format(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     private func retentionBinding(_ keyPath: WritableKeyPath<RawRetentionPolicy, Int>) -> Binding<Int> {

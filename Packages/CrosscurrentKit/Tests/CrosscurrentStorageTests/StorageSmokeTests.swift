@@ -1,6 +1,8 @@
 import Foundation
 import CrosscurrentDomain
+import CrosscurrentConnectors
 import CrosscurrentStorage
+import CrosscurrentIngestion
 import GRDB
 import Testing
 
@@ -84,6 +86,54 @@ import Testing
     #expect(next.0.id == older.id)
 }
 
+@Test func manualAndScheduledRefreshReuseOneEndpointJob() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentRefreshDedupeTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try CrosscurrentDatabase.open(at: DatabaseLocations(container: root), role: .mainApp)
+    let repository = CrosscurrentRepository(database: database, writerInstance: "refresh-dedupe")
+    let endpointID = SourceEndpointID()
+    let payload = Data("endpoint".utf8)
+    let scheduled = try await repository.scheduleRefreshJob(endpointID: endpointID, payload: payload, manual: false)
+    let manual = try await repository.scheduleRefreshJob(endpointID: endpointID, payload: payload, manual: true)
+    #expect(manual.id == scheduled.id)
+    let lease = try #require(try await repository.leaseJob(id: scheduled.id, owner: "agent"))
+    let whileLeased = try await repository.scheduleRefreshJob(endpointID: endpointID, payload: payload, manual: true)
+    #expect(whileLeased.id == scheduled.id)
+    #expect(whileLeased.state == .leased)
+    _ = try await repository.completeJob(lease.1)
+}
+
+@Test func transientRetryBackoffIsBoundedAndEventuallySuspends() {
+    let now = Date(timeIntervalSince1970: 10_000)
+    let first = JobRetryClassifier.classify(ConnectorError.transientHTTP(statusCode: 503, retryAfter: nil), attempt: 1, now: now, jitter: 0)
+    #expect(first.name == "transientHTTP")
+    #expect(first.retryAt == now.addingTimeInterval(30))
+    #expect(first.exhausted == false)
+    let last = JobRetryClassifier.classify(ConnectorError.transientHTTP(statusCode: 503, retryAfter: nil), attempt: 6, now: now, jitter: 0)
+    #expect(last.exhausted)
+    #expect(last.name == "transientHTTPExhausted")
+}
+
+@Test func developmentRootMigrationCopiesOnlyTheExplicitLegacyRoot() async throws {
+    let base = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentDevelopmentMigrationTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let legacy = base.appending(path: "Crosscurrent-Development", directoryHint: .isDirectory)
+    let destination = base.appending(path: "Application Support/Crosscurrent/Development", directoryHint: .isDirectory)
+    do {
+        let database = try CrosscurrentDatabase.open(at: DatabaseLocations(container: legacy), role: .mainApp)
+        let repository = CrosscurrentRepository(database: database, writerInstance: "legacy")
+        let revision = SourceRevision(sourceID: SourceID(), displayName: "Dogfooding Source")
+        let source = LogicalSource(id: revision.sourceID, currentRevisionID: revision.id, kind: .publication)
+        _ = try await repository.saveSource(source, revision: revision)
+    }
+    let result = try LocalDataManager.prepareDevelopmentRoot(DatabaseLocations(container: destination), legacyRoot: legacy)
+    guard case let .migrated(preservedCopy) = result else { Issue.record("Expected migration"); return }
+    #expect(preservedCopy == legacy)
+    #expect(FileManager.default.fileExists(atPath: legacy.path))
+    let migrated = try CrosscurrentDatabase.open(at: DatabaseLocations(container: destination), role: .mainApp)
+    #expect(try await CrosscurrentRepository(database: migrated, writerInstance: "new").sourceSnapshots().first?.revision.displayName == "Dogfooding Source")
+}
+
 @Test func syncFailurePreservesLastSuccessfulRefresh() async throws {
     let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentSyncFailureTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -100,6 +150,25 @@ import Testing
     let stored = try #require(try await repository.sourceEndpoint(id: endpoint.id))
     #expect(stored.health == .authenticationRequired)
     #expect(stored.lastSuccessfulSync == success)
+}
+
+@Test func followingASourceDoesNotImplicitlyFollowItsLinkedPerson() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentFollowSemanticsTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try CrosscurrentDatabase.open(at: DatabaseLocations(container: root), role: .mainApp)
+    let repository = CrosscurrentRepository(database: database, writerInstance: "follow-semantics")
+    let sourceRevision = SourceRevision(sourceID: SourceID(), displayName: "Lil'Log")
+    let source = LogicalSource(id: sourceRevision.sourceID, currentRevisionID: sourceRevision.id, kind: .publication, isFollowed: false)
+    _ = try await repository.saveSource(source, revision: sourceRevision)
+    let entityRevisionID = EntityRevisionID()
+    let person = Entity(currentRevisionID: entityRevisionID, kind: .person, displayName: "Lilian Weng", isFollowed: false)
+    _ = try await repository.saveEntity(person, revision: EntityRevision(id: entityRevisionID, entityID: person.id, displayName: person.displayName))
+    _ = try await repository.saveSourceEntityRelationship(SourceEntityRelationship(sourceID: source.id, entityID: person.id, role: .represents, provenance: .connector, confidence: .certain))
+    _ = try await repository.setSourceFollowed(source.id, followed: true)
+    let storedSource = try #require(try await repository.sourceSnapshots().first)
+    let storedPerson = try #require(try await repository.entitySnapshots().first)
+    #expect(storedSource.source.isFollowed)
+    #expect(storedPerson.entity.isFollowed == false)
 }
 
 @Test func aiCacheAndConsentRemainPromptAndPolicyRevisionAware() async throws {

@@ -34,14 +34,14 @@ public actor TodayCoordinator {
             latestRevisionID: stored?.latestRevision.id,
             completedAdditionalTimes: Set((stored?.completedAdditionalBriefingKeys ?? []).compactMap(Self.parseBriefingTime))
         )
-        guard case let .create(reason, parent) = TodayPlanner.decision(trigger: trigger, state: state, schedule: schedule) else {
-            guard let stored else { return nil }
-            return TodayUpdate(digest: stored.digest, revision: stored.latestRevision, created: false)
-        }
-
         let snapshots = try await repository.currentEventSnapshots(limit: 500)
-        let ranked = RankingEngine.rank(snapshots.map { snapshot in
-            let ageHours = max(0, now.timeIntervalSince(snapshot.aggregate.revision.endedAt ?? snapshot.aggregate.revision.startedAt ?? snapshot.aggregate.revision.createdAt) / 3_600)
+        let eligibleSnapshots = snapshots.filter { snapshot in
+            guard let activity = snapshot.meaningfulActivityAt else { return false }
+            return activity <= now.addingTimeInterval(6 * 3_600) && now.timeIntervalSince(activity) <= 7 * 86_400
+        }
+        let ranked = RankingEngine.rank(eligibleSnapshots.map { snapshot in
+            let activity = snapshot.meaningfulActivityAt ?? .distantPast
+            let ageHours = max(0, now.timeIntervalSince(activity) / 3_600)
             let coverage = min(1, Double(snapshot.independentSourceCount) / 8)
             let followed = !snapshot.followedPeople.isEmpty || !snapshot.followedTopics.isEmpty || snapshot.hasFollowedSource
             let updateMagnitude: Double = switch snapshot.aggregate.revision.changeKind {
@@ -67,7 +67,7 @@ public actor TodayCoordinator {
                 )
             )
         })
-        let snapshotByRevision = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.aggregate.revision.id, $0) })
+        let snapshotByRevision = Dictionary(uniqueKeysWithValues: eligibleSnapshots.map { ($0.aggregate.revision.id, $0) })
         var assigned = Set<EventRevisionID>()
         var entries: [DigestEntry] = []
         func append(_ candidates: [RankedEvent], section: DigestSection, limit: Int, adding extraReason: RankingReason? = nil) {
@@ -78,22 +78,52 @@ public actor TodayCoordinator {
             entries += entriesFor(selected, section: section, adding: extraReason)
         }
 
+        func age(_ value: RankedEvent) -> TimeInterval {
+            guard let date = snapshotByRevision[value.revision.id]?.meaningfulActivityAt else { return .infinity }
+            return now.timeIntervalSince(date)
+        }
+
         let hero = ranked.filter { value in
             guard let snapshot = snapshotByRevision[value.revision.id] else { return false }
-            let age = now.timeIntervalSince(value.revision.endedAt ?? value.revision.startedAt ?? value.revision.createdAt)
-            return age <= 7 * 86_400 && (snapshot.primaryAuthority >= 0.8 || snapshot.independentSourceCount >= 2 || snapshot.hasFollowedSource || !snapshot.followedPeople.isEmpty || !snapshot.followedTopics.isEmpty)
+            let strongEvidence = snapshot.primaryAuthority >= 0.8 || snapshot.independentSourceCount >= 2
+            let personallyRelevant = snapshot.hasFollowedSource || !snapshot.followedPeople.isEmpty || !snapshot.followedTopics.isEmpty
+            return age(value) <= 72 * 3_600 && value.score >= 0.52 && (strongEvidence || personallyRelevant)
         }
-        append(hero, section: .today, limit: 5)
+        append(hero, section: .today, limit: 5, adding: .freshPublication)
         append(ranked.filter { value in
-            (snapshotByRevision[value.revision.id]?.trendVelocity ?? 0) > 0
+            age(value) <= 48 * 3_600 && (snapshotByRevision[value.revision.id]?.trendVelocity ?? 0) >= 0.35
         }, section: .emerging, limit: 3)
         append(ranked.filter {
             guard let snapshot = snapshotByRevision[$0.revision.id] else { return false }
-            return !snapshot.followedPeople.isEmpty || snapshot.hasFollowedSource
+            return age($0) <= 72 * 3_600 && (!snapshot.followedPeople.isEmpty || !snapshot.followedTopics.isEmpty || snapshot.hasFollowedSource)
         }, section: .peopleYouFollow, limit: 3)
-        append(ranked.filter { (snapshotByRevision[$0.revision.id]?.readerText.count ?? 0) >= 1_200 }, section: .worthReading, limit: 3)
-        append(ranked.filter { snapshotByRevision[$0.revision.id]?.chinaGlobalCoverageSufficient == true }, section: .chinaGlobal, limit: 2, adding: .chinaGlobalCoverage)
-        append(ranked, section: .everythingElse, limit: 15)
+        append(ranked.filter {
+            guard let snapshot = snapshotByRevision[$0.revision.id], age($0) <= 7 * 86_400 else { return false }
+            let structure = snapshot.readerHTML.map { html in
+                ["<h2", "<pre", "<table", "<figure", "<math"].contains(where: html.localizedCaseInsensitiveContains)
+            } ?? false
+            return snapshot.readerText.count >= 1_500 && snapshot.primaryAuthority >= 0.65 && (structure || snapshot.readerText.count >= 4_000)
+        }, section: .worthReading, limit: 3, adding: .readingValue)
+        append(ranked.filter { age($0) <= 7 * 86_400 && snapshotByRevision[$0.revision.id]?.chinaGlobalCoverageSufficient == true }, section: .chinaGlobal, limit: 2, adding: .chinaGlobalCoverage)
+        append(ranked.filter { age($0) <= 72 * 3_600 }, section: .everythingElse, limit: 15)
+
+        let plannedSignature = entries.map { "\($0.eventRevisionID):\($0.section.rawValue):\($0.rank):\($0.explanation.map(\.rawValue).joined(separator: ","))" }
+        let existingSignature = stored?.latestRevision.entries.map { "\($0.eventRevisionID):\($0.section.rawValue):\($0.rank):\($0.explanation.map(\.rawValue).joined(separator: ","))" }
+        let decision = TodayPlanner.decision(trigger: trigger, state: state, schedule: schedule)
+        let reason: DigestRevisionReason
+        let parent: DigestRevisionID?
+        switch decision {
+        case let .create(plannedReason, plannedParent):
+            reason = plannedReason
+            parent = plannedParent
+        case .noRevision:
+            guard let stored else { return nil }
+            guard plannedSignature != existingSignature else {
+                return TodayUpdate(digest: stored.digest, revision: stored.latestRevision, created: false)
+            }
+            reason = .policyRefresh
+            parent = stored.latestRevision.id
+        }
 
         let digestID = stored?.digest.id ?? DigestID()
         let revision = DigestRevision(digestID: digestID, parentRevisionID: parent, reason: reason, createdAt: now, entries: entries)

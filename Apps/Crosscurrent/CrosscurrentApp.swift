@@ -10,6 +10,7 @@ import CrosscurrentModels
 import CrosscurrentRanking
 import CrosscurrentSearch
 import CrosscurrentStorage
+import AppKit
 import ServiceManagement
 import Sparkle
 import SwiftUI
@@ -37,7 +38,8 @@ struct CrosscurrentApp: App {
         .commands {
             CommandGroup(after: .newItem) {
                 Button("Add Source…") {
-                    model.selection = .sources
+                    model.selection = .following
+                    model.followingFilter = .sources
                     model.presentsAddSource = true
                 }
                 .keyboardShortcut("n", modifiers: .command)
@@ -54,6 +56,8 @@ struct CrosscurrentApp: App {
                 Divider()
                 Button("Open Selected Event") { model.openSelectedEvent() }
                     .keyboardShortcut("o", modifiers: .command)
+                Button("Focus Reading") { model.toggleFocusReading() }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
                 Button("Save or Unsave Selected Event") { model.toggleSelectedEventSaved() }
                     .keyboardShortcut("s", modifiers: [.command, .option])
                 Button("Mark Selected Event Read") { model.markSelectedEventRead() }
@@ -119,8 +123,15 @@ final class AppModel: ObservableObject {
     @Published var topics: [StoredTopicSnapshot] = []
     @Published var savedEventIDs: Set<EventID> = []
     @Published var rawRetentionPolicy = RawRetentionPolicy()
+    @Published var localDataUsage: LocalDataUsage?
+    @Published var dataStorageStatus = ""
+    @Published var focusReading = false
+    @Published var followingFilter: FollowingFilter = .all
 
     private(set) var repository: CrosscurrentRepository?
+    private var database: CrosscurrentDatabase?
+    private var databaseLocations: DatabaseLocations?
+    private var developmentDataRoot = false
     private let updaterController: SPUStandardUpdaterController
     private var refreshExecutor: RefreshJobExecutor?
     private var eventMaintainer: EvidenceEventMaintainer?
@@ -138,6 +149,7 @@ final class AppModel: ObservableObject {
     private var observedGenerations: [ChangeDomain: Int64] = [:]
     private let keychain = KeychainSecretStore()
     private var pendingBrowserAccounts: [AuthenticatedCreatorPlatform: ConnectorAccountID] = [:]
+    private var destinationBeforeEvent: SidebarDestination = .today
 
     init() {
         let feed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? ""
@@ -158,19 +170,23 @@ final class AppModel: ObservableObject {
             if !teamID.isEmpty, let group = try? DatabaseLocations.appGroup() {
                 locations = group
             } else {
-                // Unsigned screenshot/test builds cannot prove App Group membership and
-                // macOS container protection may prompt when they touch shared Library
-                // locations. Production-signed builds always take the App Group branch.
                 #if DEBUG
-                let developmentContainer = Self.fixtureContainer ?? FileManager.default.temporaryDirectory
-                    .appending(path: "Crosscurrent-Development", directoryHint: .isDirectory)
+                if let fixtureContainer = Self.fixtureContainer {
+                    locations = DatabaseLocations(container: fixtureContainer)
+                } else {
+                    locations = try DatabaseLocations.development()
+                    developmentDataRoot = true
+                    _ = try LocalDataManager.prepareDevelopmentRoot(locations)
+                }
                 #else
-                let developmentContainer = FileManager.default.temporaryDirectory
-                    .appending(path: "Crosscurrent-Development", directoryHint: .isDirectory)
+                locations = try DatabaseLocations.development()
+                developmentDataRoot = true
+                _ = try LocalDataManager.prepareDevelopmentRoot(locations)
                 #endif
-                locations = DatabaseLocations(container: developmentContainer)
             }
             let database = try CrosscurrentDatabase.open(at: locations, role: .mainApp)
+            self.database = database
+            databaseLocations = locations
             let repository = CrosscurrentRepository(database: database, writerInstance: "main-\(UUID().uuidString.lowercased())")
             self.repository = repository
             let blobStore = CanonicalBlobStore(locations: locations, repository: repository)
@@ -227,8 +243,9 @@ final class AppModel: ObservableObject {
             try await reloadCanonicalEvents()
             try await reloadCanonicalLibrary()
             startSemanticIndex(repository: repository, locations: locations)
-            backgroundState = CrosscurrentServices.agent.status.displayName
+            backgroundState = teamID.isEmpty ? String(localized: "Foreground refresh only") : CrosscurrentServices.agent.status.displayName
             browserWorkerState = CrosscurrentServices.browser.status.displayName
+            refreshLocalDataUsage()
             _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
             await reconcileGenerations()
             observationTask = Task { [weak self, repository] in
@@ -245,16 +262,77 @@ final class AppModel: ObservableObject {
             }
         } catch {
             startupError = error.localizedDescription
-            backgroundState = String(localized: "Foreground only")
+            backgroundState = String(localized: "Foreground refresh only")
         }
     }
 
     func open(_ event: EventCardModel) {
+        if let selection, selection != .eventDetail { destinationBeforeEvent = selection }
         selectedEventID = event.id
         selection = .eventDetail
         Task { [repository] in
             _ = try? await repository?.recordHistory(targetKind: "event", targetID: event.id.description, revisionID: event.revisionID.description)
         }
+    }
+
+    func closeEvent() {
+        focusReading = false
+        selection = destinationBeforeEvent
+    }
+
+    func toggleFocusReading() { focusReading.toggle() }
+
+    func refreshLocalDataUsage() {
+        guard let databaseLocations else { return }
+        localDataUsage = LocalDataManager.usage(at: databaseLocations, isDevelopment: developmentDataRoot)
+    }
+
+    func openDataFolder() {
+        guard let databaseLocations else { return }
+        NSWorkspace.shared.open(databaseLocations.container)
+    }
+
+    func backUpNow() async {
+        do {
+            guard let database else { return }
+            let url = try database.createUserBackup()
+            dataStorageStatus = String(localized: "Backup created: \(url.lastPathComponent)")
+            refreshLocalDataUsage()
+        } catch { dataStorageStatus = error.localizedDescription }
+    }
+
+    func rebuildSearchIndex() async {
+        do {
+            _ = try await indexCoordinator?.synchronize(force: true)
+            dataStorageStatus = String(localized: "Search index rebuilt")
+            refreshLocalDataUsage()
+        } catch { dataStorageStatus = error.localizedDescription }
+    }
+
+    func clearRebuildableCache() async {
+        guard let databaseLocations, let repository else { return }
+        semanticStartupTask?.cancel()
+        semanticIndexCoordinator = nil
+        indexCoordinator = nil
+        searchStore = nil
+        do {
+            try LocalDataManager.clearRebuildableCache(databaseLocations)
+            let index = try DerivedIndexCoordinator(repository: repository, directory: databaseLocations.derivedSearch)
+            indexCoordinator = index
+            searchStore = await index.store
+            _ = try await index.synchronize(force: true)
+            startSemanticIndex(repository: repository, locations: databaseLocations)
+            dataStorageStatus = String(localized: "Rebuildable cache cleared")
+            refreshLocalDataUsage()
+        } catch { dataStorageStatus = error.localizedDescription }
+    }
+
+    func deleteAllLocalData() {
+        guard let databaseLocations else { return }
+        do {
+            try LocalDataManager.markForDeletionOnNextLaunch(databaseLocations)
+            NSApp.terminate(nil)
+        } catch { dataStorageStatus = error.localizedDescription }
     }
 
     func stepSelectedEvent(by offset: Int) {
@@ -301,13 +379,16 @@ final class AppModel: ObservableObject {
             } catch { startupError = error.localizedDescription }
         case .source:
             selectedLibraryStableID = result.stableID
-            selection = .sources
+            followingFilter = .sources
+            selection = .following
         case .person, .organization:
             selectedLibraryStableID = result.stableID
-            selection = .people
+            followingFilter = .people
+            selection = .following
         case .topic:
             selectedLibraryStableID = result.stableID
-            selection = .topics
+            followingFilter = .topics
+            selection = .following
         }
     }
 
@@ -375,11 +456,13 @@ final class AppModel: ObservableObject {
         guard let repository, let refreshExecutor else { throw CocoaError(.fileNoSuchFile) }
         let startedAt = Date.now
         let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpointID))
-        let job = DurableJob(kind: CrosscurrentJobKind.refresh, inputHash: endpointID.description, idempotencyKey: "foreground-refresh:\(endpointID):\(UUID().uuidString.lowercased())", payload: payload)
-        _ = try await repository.enqueue(job)
+        let job = try await repository.scheduleRefreshJob(endpointID: endpointID, payload: payload, manual: true)
+        if job.state == .leased { try? await reloadCanonicalLibrary(); return }
         guard let (leasedJob, lease) = try await repository.leaseJob(id: job.id, owner: "main-foreground", duration: 120) else {
-            throw CrosscurrentStorageError.jobLeaseUnavailable
+            try? await reloadCanonicalLibrary()
+            return
         }
+        try? await reloadCanonicalLibrary()
         do {
             let checkpoint = try await refreshExecutor.execute(job: leasedJob, lease: lease)
             _ = try await repository.completeJob(lease, checkpoint: try JSONEncoder().encode(checkpoint))
@@ -393,8 +476,10 @@ final class AppModel: ObservableObject {
             try await reloadCanonicalEvents()
         } catch {
             let retry = JobRetryClassifier.classify(error, attempt: leasedJob.attemptCount)
-            _ = try? await repository.failJob(lease, retryClass: retry.name, retryAt: retry.retryAt)
-            _ = try? await repository.recordSyncFailure(endpointID: endpointID, health: Self.health(for: error), errorClass: retry.name, message: error.localizedDescription, startedAt: startedAt)
+            if retry.exhausted { _ = try? await repository.suspendJob(lease, failureClass: retry.name) }
+            else { _ = try? await repository.failJob(lease, retryClass: retry.name, retryAt: retry.retryAt) }
+            let previousSuccess = endpointHealth[endpointID]?.lastSuccess != nil
+            _ = try? await repository.recordSyncFailure(endpointID: endpointID, health: RefreshFailureHealthClassifier.health(for: error, attempt: leasedJob.attemptCount, hasCachedSuccess: previousSuccess), errorClass: retry.name, message: error.localizedDescription, startedAt: startedAt)
             try? await reloadCanonicalLibrary()
             throw error
         }
@@ -403,7 +488,9 @@ final class AppModel: ObservableObject {
     func refresh(_ snapshot: StoredSourceSnapshot) async {
         guard let endpoint = snapshot.endpoints.first else { return }
         do { try await foregroundRefresh(endpointID: endpoint.id) }
-        catch { startupError = error.localizedDescription }
+        catch {
+            if RefreshFailureHealthClassifier.isTransient(error) == false { startupError = error.localizedDescription }
+        }
     }
 
     func reconnect(_ endpoint: SourceEndpoint) async {
@@ -1020,7 +1107,12 @@ final class AppModel: ObservableObject {
         let byRevision = Dictionary(uniqueKeysWithValues: cards.map { ($0.revisionID, $0) })
         if let state = try await repository.digestState(briefingDay: Calendar.autoupdatingCurrent.startOfDay(for: .now)) {
             digestSections = Dictionary(grouping: state.latestRevision.entries, by: \.section).mapValues { entries in
-                entries.sorted { $0.rank < $1.rank }.compactMap { byRevision[$0.eventRevisionID] }
+                entries.sorted { $0.rank < $1.rank }.compactMap { entry in
+                    guard var card = byRevision[entry.eventRevisionID] else { return nil }
+                    card.reasons = entry.explanation
+                    card.score = entry.score
+                    return card
+                }
             }
         } else {
             digestSections = [:]
@@ -1068,7 +1160,7 @@ final class AppModel: ObservableObject {
             independentSourceCount: snapshot.independentSourceCount,
             topics: snapshot.topics,
             followedPeople: snapshot.followedPeople,
-            date: revision.endedAt ?? revision.startedAt ?? revision.createdAt,
+            date: snapshot.meaningfulActivityAt ?? revision.endedAt ?? revision.startedAt ?? revision.createdAt,
             readStatus: snapshot.readStatus,
             score: min(1, 0.5 + Double(snapshot.independentSourceCount) * 0.06),
             reasons: reasons,
@@ -1109,16 +1201,6 @@ final class AppModel: ObservableObject {
         case .weibo: .weibo
         case .zhihu: .zhihu
         default: nil
-        }
-    }
-
-    private static func health(for error: Error) -> ConnectorHealth {
-        switch error {
-        case ConnectorError.authenticationRequired, ConnectorError.interactionRequired: .authenticationRequired
-        case ConnectorError.rateLimited: .rateLimited
-        case ConnectorError.platformChanged: .platformChanged
-        case ConnectorError.policyDenied: .disabled
-        default: .temporarilyUnavailable
         }
     }
 

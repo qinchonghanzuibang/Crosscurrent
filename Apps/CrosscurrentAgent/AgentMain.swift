@@ -129,7 +129,19 @@ final class AgentRuntime: NSObject, @unchecked Sendable {
                         _ = try await repository.completeJob(lease, checkpoint: checkpoint)
                     } catch {
                         let retry = JobRetryClassifier.classify(error, attempt: job.attemptCount)
-                        _ = try? await repository.failJob(lease, retryClass: retry.name, retryAt: retry.retryAt)
+                        if retry.exhausted { _ = try? await repository.suspendJob(lease, failureClass: retry.name) }
+                        else { _ = try? await repository.failJob(lease, retryClass: retry.name, retryAt: retry.retryAt) }
+                        if job.kind == CrosscurrentJobKind.refresh,
+                           let payload = try? JSONDecoder().decode(RefreshJobPayload.self, from: job.payload),
+                           let endpoint = try? await repository.sourceEndpoint(id: payload.endpointID) {
+                            _ = try? await repository.recordSyncFailure(
+                                endpointID: payload.endpointID,
+                                health: RefreshFailureHealthClassifier.health(for: error, attempt: job.attemptCount, hasCachedSuccess: endpoint.lastSuccessfulSync != nil),
+                                errorClass: retry.name,
+                                message: error.localizedDescription,
+                                startedAt: lease.acquiredAt
+                            )
+                        }
                     }
                 } else {
                     try await Task.sleep(for: .seconds(5))
@@ -142,20 +154,15 @@ final class AgentRuntime: NSObject, @unchecked Sendable {
     }
 
     private func enqueueDueRefreshes(repository: CrosscurrentRepository, registry: ConnectorRegistry, now: Date) async throws {
-        let bucket = Int(now.timeIntervalSince1970 / (30 * 60))
         let snapshots = try await repository.sourceSnapshots()
         for snapshot in snapshots where !snapshot.source.isArchived {
             for endpoint in snapshot.endpoints {
                 guard endpoint.lastSuccessfulSync.map({ now.timeIntervalSince($0) >= 30 * 60 }) ?? true,
+                      ![ConnectorHealth.authenticationRequired, .platformChanged, .temporarilyUnavailable, .error, .disabled].contains(endpoint.health),
                       await registry.connector(for: endpoint.connector) != nil
                 else { continue }
                 let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpoint.id))
-                _ = try await repository.enqueue(DurableJob(
-                    kind: CrosscurrentJobKind.refresh,
-                    inputHash: endpoint.id.description,
-                    idempotencyKey: "scheduled-refresh:\(endpoint.id):\(bucket)",
-                    payload: payload
-                ))
+                _ = try await repository.scheduleRefreshJob(endpointID: endpoint.id, payload: payload, manual: false, now: now)
             }
         }
     }

@@ -147,6 +147,7 @@ public enum ConnectorError: LocalizedError, Equatable {
     case authenticationRequired
     case interactionRequired
     case rateLimited(retryAfter: TimeInterval?)
+    case transientHTTP(statusCode: Int, retryAfter: TimeInterval?)
     case platformChanged(String)
     case policyDenied(String)
     case invalidResponse(String)
@@ -158,6 +159,7 @@ public enum ConnectorError: LocalizedError, Equatable {
         case .authenticationRequired: "Reconnect this account to continue refreshing."
         case .interactionRequired: "Open Crosscurrent to complete this connector action."
         case let .rateLimited(retryAfter): retryAfter.map { "Rate limited; retry in \(Int($0)) seconds." } ?? "Rate limited."
+        case let .transientHTTP(statusCode, _): "The source returned HTTP \(statusCode); Crosscurrent will retry."
         case let .platformChanged(message): "The platform changed: \(message)"
         case let .policyDenied(message): "Connector policy denied the operation: \(message)"
         case let .invalidResponse(message): "The connector returned an invalid response: \(message)"
