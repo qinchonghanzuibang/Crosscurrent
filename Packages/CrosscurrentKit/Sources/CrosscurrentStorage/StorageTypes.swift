@@ -439,8 +439,9 @@ public struct StoredEventSnapshot: Codable, Hashable, Sendable {
     public var originalAccountID: ConnectorAccountID?
     public var chinaGlobalCoverageSufficient: Bool
     public var readStatus: RevisionReadStatus
+    public var meaningfulActivityAt: Date?
 
-    public init(aggregate: StoredEventAggregate, primaryItemRevisionID: ItemRevisionID, primarySourceID: SourceID, contentPrivacy: ContentPrivacy, primarySourceName: String, sourceCount: Int, independentSourceCount: Int, topics: [String], followedTopics: [String] = [], followedPeople: [String], hasFollowedSource: Bool = false, isSaved: Bool = false, primaryAuthority: Double = 0.5, trendVelocity: Double = 0, readerText: String, readerHTML: String? = nil, originalURL: URL?, originalAccountID: ConnectorAccountID?, chinaGlobalCoverageSufficient: Bool, readStatus: RevisionReadStatus) {
+    public init(aggregate: StoredEventAggregate, primaryItemRevisionID: ItemRevisionID, primarySourceID: SourceID, contentPrivacy: ContentPrivacy, primarySourceName: String, sourceCount: Int, independentSourceCount: Int, topics: [String], followedTopics: [String] = [], followedPeople: [String], hasFollowedSource: Bool = false, isSaved: Bool = false, primaryAuthority: Double = 0.5, trendVelocity: Double = 0, readerText: String, readerHTML: String? = nil, originalURL: URL?, originalAccountID: ConnectorAccountID?, chinaGlobalCoverageSufficient: Bool, readStatus: RevisionReadStatus, meaningfulActivityAt: Date? = nil) {
         self.aggregate = aggregate
         self.primaryItemRevisionID = primaryItemRevisionID
         self.primarySourceID = primarySourceID
@@ -461,6 +462,7 @@ public struct StoredEventSnapshot: Codable, Hashable, Sendable {
         self.originalAccountID = originalAccountID
         self.chinaGlobalCoverageSufficient = chinaGlobalCoverageSufficient
         self.readStatus = readStatus
+        self.meaningfulActivityAt = meaningfulActivityAt
     }
 }
 
@@ -692,6 +694,20 @@ public struct DatabaseLocations: Sendable {
             throw CocoaError(.fileNoSuchFile, userInfo: [NSLocalizedDescriptionKey: "App Group container is unavailable: \(identifier)"])
         }
         return Self(container: url)
+    }
+
+    /// Persistent, unsigned dogfooding data. This deliberately does not overlap the
+    /// signed App Group or the explicitly supplied roots used by tests and canaries.
+    public static func development(fileManager: FileManager = .default) throws -> Self {
+        let applicationSupport = try fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        return Self(container: applicationSupport
+            .appending(path: "Crosscurrent", directoryHint: .isDirectory)
+            .appending(path: "Development", directoryHint: .isDirectory))
     }
 
     public func prepare() throws {

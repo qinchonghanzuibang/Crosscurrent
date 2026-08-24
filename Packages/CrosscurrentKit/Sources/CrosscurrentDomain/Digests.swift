@@ -1,7 +1,7 @@
 import Foundation
 
 public enum DigestRevisionReason: String, Codable, CaseIterable, Sendable {
-    case initialDaily, materialEvent, majorUpdate, manualRefresh, additionalBriefing
+    case initialDaily, materialEvent, majorUpdate, manualRefresh, additionalBriefing, policyRefresh
 }
 
 public enum DigestSection: String, Codable, CaseIterable, Sendable {
@@ -59,6 +59,7 @@ public struct DigestEntry: Identifiable, Codable, Hashable, Sendable {
 public enum RankingReason: String, Codable, CaseIterable, Sendable {
     case followedSource, followedPerson, followedTopic, primarySource, independentCoverage
     case rapidGrowth, novelDevelopment, chinaGlobalCoverage, savedRelationship
+    case freshPublication, materialUpdate, readingValue
 }
 
 public enum RevisionReadStatus: String, Codable, CaseIterable, Sendable {

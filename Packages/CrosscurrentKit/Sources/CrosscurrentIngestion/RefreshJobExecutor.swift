@@ -67,6 +67,7 @@ public actor RefreshJobExecutor {
         guard let connector = await connectors.connector(for: endpoint.connector) else { throw JobExecutionError.missingConnector(endpoint.connector) }
 
         let startedAt = Date.now
+        _ = try await repository.recordSyncStarted(endpointID: endpoint.id, at: startedAt)
         var lease = initialLease
         var cursor = try await repository.syncCursor(endpointID: endpoint.id).map { ConnectorCursor(family: $0.family, encodedValue: $0.data) }
         var pages = 0
@@ -99,14 +100,20 @@ public actor RefreshJobExecutor {
 }
 
 public enum JobRetryClassifier {
-    public static func classify(_ error: Error, attempt: Int, now: Date = .now) -> (name: String, retryAt: Date) {
+    public static func classify(_ error: Error, attempt: Int, now: Date = .now, jitter: Double = Double.random(in: -0.2...0.2)) -> (name: String, retryAt: Date, exhausted: Bool) {
         let base: TimeInterval
         let name: String
+        var isTransient = false
+        var honorsRetryAfter = false
         switch error {
         case ConnectorError.authenticationRequired, ConnectorError.interactionRequired:
             name = "authentication"; base = 60 * 60
         case let ConnectorError.rateLimited(retryAfter):
-            name = "rateLimit"; base = retryAfter ?? 15 * 60
+            name = "rateLimit"; base = retryAfter ?? 15 * 60; isTransient = true; honorsRetryAfter = retryAfter != nil
+        case let ConnectorError.transientHTTP(_, retryAfter):
+            name = "transientHTTP"; base = retryAfter ?? min(30 * 60, pow(2, Double(max(0, attempt - 1))) * 30); isTransient = true; honorsRetryAfter = retryAfter != nil
+        case let urlError as URLError where [.timedOut, .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .dnsLookupFailed].contains(urlError.code):
+            name = "network"; base = min(30 * 60, pow(2, Double(max(0, attempt - 1))) * 30); isTransient = true
         case ConnectorError.platformChanged:
             name = "platformChanged"; base = 6 * 60 * 60
         case ConnectorError.policyDenied, JobExecutionError.cancelled:
@@ -114,8 +121,31 @@ public enum JobRetryClassifier {
         case JobExecutionError.missingEndpoint, JobExecutionError.missingConnector, JobExecutionError.unsupportedKind:
             name = "permanentConfiguration"; base = 24 * 60 * 60
         default:
-            name = "transient"; base = min(6 * 60 * 60, pow(2, Double(min(attempt, 10))) * 15)
+            name = "transient"; base = min(6 * 60 * 60, pow(2, Double(min(attempt, 10))) * 15); isTransient = true
         }
-        return (name, now.addingTimeInterval(base))
+        let exhausted = isTransient && attempt >= 6
+        let boundedJitter = min(0.2, max(-0.2, jitter))
+        let delay = exhausted ? 24 * 60 * 60 : max(1, base * (1 + (honorsRetryAfter ? max(0, boundedJitter) : boundedJitter)))
+        return (exhausted ? "\(name)Exhausted" : name, now.addingTimeInterval(delay), exhausted)
+    }
+}
+
+public enum RefreshFailureHealthClassifier {
+    public static func health(for error: Error, attempt: Int, hasCachedSuccess: Bool) -> ConnectorHealth {
+        switch error {
+        case ConnectorError.authenticationRequired, ConnectorError.interactionRequired: .authenticationRequired
+        case ConnectorError.rateLimited: hasCachedSuccess && attempt < 3 ? .retrying : .rateLimited
+        case ConnectorError.transientHTTP: hasCachedSuccess && attempt < 3 ? .retrying : .temporarilyUnavailable
+        case ConnectorError.platformChanged: .platformChanged
+        case ConnectorError.policyDenied: .disabled
+        default: isTransient(error) && hasCachedSuccess && attempt < 3 ? .retrying : .temporarilyUnavailable
+        }
+    }
+
+    public static func isTransient(_ error: Error) -> Bool {
+        if case ConnectorError.rateLimited = error { return true }
+        if case ConnectorError.transientHTTP = error { return true }
+        if let url = error as? URLError { return [.timedOut, .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .dnsLookupFailed].contains(url.code) }
+        return false
     }
 }

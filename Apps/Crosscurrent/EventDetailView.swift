@@ -7,8 +7,8 @@ import SwiftUI
 
 struct EventDetailView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var tab = "Overview"
     @State private var choosingMergeTarget = false
+    @State private var readingPrimary = false
     @State private var evidence: [StoredEventEvidence] = []
     @State private var history: [StoredEventRevisionSummary] = []
     @State private var coverage = StoredCoverageComparison()
@@ -19,21 +19,14 @@ struct EventDetailView: View {
 
     var body: some View {
         if let event {
-            VStack(spacing: 0) {
-                header(event)
-                EventSectionStrip(selection: $tab)
-                    .padding(.horizontal, 28)
-                    .padding(.bottom, 16)
-                Divider()
-                Group {
-                    switch tab {
-                    case "Reader": ReaderPane(event: event, evidence: evidence)
-                    case "Primary": primarySource(event)
-                    case "Sources": sources
-                    case "Timeline": timeline(event)
-                    case "Perspectives": perspectives(event)
-                    default: overview(event)
-                    }
+            Group {
+                if event.sourceCount <= 1 || event.membershipCount <= 1 || readingPrimary {
+                    ReaderPane(event: event, evidence: evidence, backAction: {
+                        if event.sourceCount > 1 && readingPrimary { readingPrimary = false }
+                        else { model.closeEvent() }
+                    })
+                } else {
+                    eventSummary(event)
                 }
             }
             .onAppear { model.setEventRead(event) }
@@ -46,17 +39,20 @@ struct EventDetailView: View {
                 coverage = await loadedCoverage
             }
             .toolbar {
-                ToolbarItemGroup {
+                if event.sourceCount > 1 && !readingPrimary {
+                    ToolbarItemGroup {
                     Button { model.toggleSaved(event) } label: {
                         Label(model.savedEventIDs.contains(event.id) ? "Saved" : "Save", systemImage: model.savedEventIDs.contains(event.id) ? "bookmark.fill" : "bookmark")
                     }
                     Button("Mark Unread") { model.setEventUnread(event) }
-                    Button("Merge") { choosingMergeTarget = true }
-                    Button("Split") { Task { await model.splitPrimaryMembership(event) } }.disabled(event.membershipCount < 2)
-                    Menu("Correct") {
-                        Button("Confirm membership") { Task { await model.confirmPrimaryMembership(event) } }
-                        Button("Reject membership") { Task { await model.rejectPrimaryMembership(event) } }
+                    Menu {
+                        Button("This article doesn’t belong in this story") { Task { await model.splitPrimaryMembership(event) } }
+                        Button("These are the same story…") { choosingMergeTarget = true }
+                        Button("Move this article to another story…") { choosingMergeTarget = true }
+                    } label: {
+                        Label("Fix story grouping…", systemImage: "ellipsis.circle")
                     }
+                }
                 }
             }
             .sheet(isPresented: $choosingMergeTarget) {
@@ -72,7 +68,7 @@ struct EventDetailView: View {
                             }
                         }.buttonStyle(.plain)
                     }
-                    .navigationTitle("Merge with Event")
+                    .navigationTitle("Choose the matching story")
                     .toolbar { ToolbarItem { Button("Cancel") { choosingMergeTarget = false } } }
                 }.frame(minWidth: 540, minHeight: 420)
             }
@@ -81,113 +77,61 @@ struct EventDetailView: View {
         }
     }
 
-    private func header(_ event: EventCardModel) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack { StatusPill(event.readStatus == .updated ? String(localized: "Updated") : String(localized: "Event"), color: event.readStatus == .updated ? CrosscurrentColor.update : CrosscurrentColor.accent); Spacer(); Text(event.date, style: .relative).foregroundStyle(.secondary) }
-            Text(event.title).font(.system(size: 34, weight: .bold, design: .serif)).tracking(-0.7)
-            Text(event.summary).font(.title3).foregroundStyle(.secondary).lineSpacing(3)
-            Text(String.localizedStringWithFormat(String(localized: "Primary: %@ · %lld independent evidence groups"), event.primarySource, event.independentSourceCount)).font(.caption).foregroundStyle(.secondary)
-        }.padding(28)
-    }
-
-    private func overview(_ event: EventCardModel) -> some View {
+    private func eventSummary(_ event: EventCardModel) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                SectionRule("Overview")
-                Text(event.summary).font(.title3)
-                SectionRule("Evidence", trailing: String.localizedStringWithFormat(String(localized: "%lld exact assertions"), evidence.count))
-                if evidence.isEmpty {
-                    ContentUnavailableView("No canonical evidence loaded", systemImage: "doc.text.magnifyingglass")
-                } else {
-                    ForEach(evidence.prefix(3)) { assertion in
-                        EvidenceRow(source: assertion.sourceName, title: assertion.title, text: assertion.excerpt, metadata: evidenceMetadata(assertion))
+                Text(event.date, style: .relative).font(.caption).foregroundStyle(.secondary)
+                Text(event.title).font(.system(size: 36, weight: .bold, design: .serif)).tracking(-0.7)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("What happened").font(.title2.bold())
+                    Text(event.summary).font(.title3).foregroundStyle(.secondary).lineSpacing(3)
+                }
+                if let primary = evidence.first(where: \.isPrimary) ?? evidence.first {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Primary source").font(.headline)
+                        Text(primary.sourceName).font(.subheadline.weight(.semibold))
+                        Text(primary.title).foregroundStyle(.secondary)
+                        Button("Read", systemImage: "doc.text") { readingPrimary = true }.buttonStyle(.borderedProminent)
                     }
+                    .padding(16).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
                 }
-            }.padding(28).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
-        }
-    }
-
-    private func primarySource(_ event: EventCardModel) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                SectionRule("Primary Source")
-                if let primary = evidence.first(where: \.isPrimary) {
-                    EvidenceRow(source: primary.sourceName, title: primary.title, text: primary.excerpt, metadata: evidenceMetadata(primary))
-                } else {
-                    ContentUnavailableView("Primary evidence unavailable", systemImage: "doc.badge.ellipsis")
-                }
-                Text("Primary-source selection is deterministic and the EventRevision stores the exact membership assertion; later revisions never rewrite this provenance.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.padding(28).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
-        }
-    }
-
-    private var sources: some View {
-        Group {
-            if evidence.isEmpty { ContentUnavailableView("No canonical evidence loaded", systemImage: "doc.text") }
-            else {
-                List(evidence) { assertion in
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack { Text(assertion.sourceName).font(.headline); if assertion.isPrimary { StatusPill("Primary") }; Spacer(); Text(assertion.confidence.value, format: .percent.precision(.fractionLength(0))).foregroundStyle(.secondary) }
-                        Text(assertion.title).font(.subheadline)
-                        Text(evidenceMetadata(assertion)).font(.caption).foregroundStyle(.secondary)
-                    }.padding(.vertical, 5)
-                }.listStyle(.inset)
-            }
-        }
-    }
-
-    private func timeline(_ event: EventCardModel) -> some View {
-        Group {
-            if history.isEmpty {
-                ContentUnavailableView("No revision history loaded", systemImage: "clock.arrow.circlepath")
-            } else {
-                List(history) { revision in
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: revision.id == event.revisionID ? "circle.fill" : "circle")
-                            .foregroundStyle(revision.id == event.revisionID ? CrosscurrentColor.accent : .secondary)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(revision.title).font(.headline)
-                            Text(String.localizedStringWithFormat(String(localized: "Revision %lld · %@ · %lld evidence assertions"), revision.ordinal, revision.changeKind.displayName, revision.evidenceCount))
-                                .font(.caption).foregroundStyle(.secondary)
+                DisclosureGroup {
+                    VStack(spacing: 10) {
+                        ForEach(evidence) { assertion in
+                            EvidenceRow(source: assertion.sourceName, title: assertion.title, text: assertion.excerpt, metadata: evidenceMetadata(assertion))
                         }
-                        Spacer()
-                        Text(revision.createdAt, style: .relative).font(.caption).foregroundStyle(.secondary)
-                    }.padding(.vertical, 5)
-                }.listStyle(.inset)
-            }
-        }
-    }
-
-    private func perspectives(_ event: EventCardModel) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                SectionRule("Different perspectives")
-                if evidence.count < 2 {
-                    ContentUnavailableView("More independent evidence is needed", systemImage: "rectangle.3.group.bubble")
-                } else {
-                    ForEach(evidence.filter { !$0.isPrimary }.prefix(4)) { assertion in
-                        EvidenceRow(source: assertion.sourceName, title: assertion.title, text: assertion.excerpt, metadata: evidenceMetadata(assertion))
+                    }.padding(.top, 10)
+                } label: {
+                    Text("\(event.independentSourceCount) independent sources · \(event.sourceCount) items").font(.headline)
+                }
+                let meaningfulHistory = history.filter { $0.changeKind.isReaderVisible }.dropFirst()
+                if !meaningfulHistory.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Important updates").font(.title2.bold())
+                        ForEach(Array(meaningfulHistory.prefix(4))) { revision in
+                            HStack(alignment: .firstTextBaseline) {
+                                Text("Updated \(revision.createdAt.formatted(.relative(presentation: .named))) — \(revision.changeKind.displayName)")
+                                Spacer()
+                                Text("\(revision.evidenceCount) sources").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
-                SectionRule("Coverage Comparison", trailing: coverage.isQualified ? String(localized: "Evidence-qualified") : String(localized: "More classified evidence needed"))
-                HStack(alignment: .top, spacing: 16) {
-                    coverageColumn("China-focused", evidence: coverage.chinaFocused)
-                    coverageColumn("Global-focused", evidence: coverage.globalFocused)
+                if coverage.isQualified {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Different perspectives").font(.title2.bold())
+                        HStack(alignment: .top, spacing: 16) {
+                            coverageColumn("China-focused", evidence: coverage.chinaFocused)
+                            coverageColumn("Global-focused", evidence: coverage.globalFocused)
+                        }
+                        if model.providerConfigured {
+                            Button("Generate cited perspective synthesis") { Task { await generatePerspectiveSynthesis(event) } }
+                            if !perspectiveSynthesis.isEmpty { Text(perspectiveSynthesis).textSelection(.enabled) }
+                        }
+                    }
                 }
-                Text("This provider-free comparison shows classified independent Sources, timing, primary evidence, and factual evidence excerpts. It does not infer framing, sentiment, motive, language, or nationality.")
-                    .font(.caption).foregroundStyle(.secondary)
-                SectionRule("Perspective Synthesis")
-                if model.providerConfigured {
-                    Button("Generate cited perspective synthesis") { Task { await generatePerspectiveSynthesis(event) } }
-                        .disabled(!coverage.isQualified || perspectiveSynthesisStatus == String(localized: "Generating…"))
-                    if !perspectiveSynthesisStatus.isEmpty { Text(perspectiveSynthesisStatus).font(.caption).foregroundStyle(.secondary) }
-                    if !perspectiveSynthesis.isEmpty { Text(perspectiveSynthesis).textSelection(.enabled) }
-                } else {
-                    Text("Configure a policy-permitted reasoning provider to synthesize framing or emphasis differences with citations. Crosscurrent does not generate a pseudo-semantic narrative without one.")
-                        .foregroundStyle(.secondary)
-                }
-            }.padding(28).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
+            }
+            .padding(28).frame(maxWidth: 880, alignment: .leading).frame(maxWidth: .infinity)
         }
     }
 
@@ -216,7 +160,10 @@ struct EventDetailView: View {
 
     private func evidenceMetadata(_ assertion: StoredEventEvidence) -> String {
         let primary = assertion.isPrimary ? String(localized: "Primary") : assertion.role.rawValue.capitalized
-        return "\(primary) · ItemRevision \(assertion.itemRevisionID.description.prefix(8)) · bytes \(assertion.span.utf8Start)–\(assertion.span.utf8Start + assertion.span.utf8Length)"
+        if let publishedAt = assertion.publishedAt {
+            return "\(primary) evidence · \(publishedAt.formatted(date: .abbreviated, time: .omitted))"
+        }
+        return "\(primary) evidence"
     }
 
     private func generatePerspectiveSynthesis(_ event: EventCardModel) async {
@@ -236,42 +183,10 @@ struct EventDetailView: View {
             )
             guard result.contains("[E") else { throw AIProviderError.invalidResponse }
             perspectiveSynthesis = result
-            perspectiveSynthesisStatus = String(localized: "Generated with the configured reasoning route; citations map to exact membership assertions above.")
+            perspectiveSynthesisStatus = String(localized: "Generated with the configured reasoning route; citations map to the exact evidence above.")
         } catch {
             perspectiveSynthesisStatus = error.localizedDescription
         }
-    }
-}
-
-private struct EventSectionStrip: View {
-    @Binding var selection: String
-    private let sections = ["Overview", "Timeline", "Primary", "Sources", "Perspectives", "Reader"]
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(sections, id: \.self) { section in
-                Button {
-                    selection = section
-                } label: {
-                    Text(LocalizedStringKey(section))
-                        .font(.subheadline.weight(selection == section ? .semibold : .regular))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(selection == section ? Color.white : Color.primary)
-                .background(selection == section ? CrosscurrentColor.accent : Color.clear, in: RoundedRectangle(cornerRadius: 7))
-                .accessibilityAddTraits(selection == section ? .isSelected : [])
-                .accessibilityIdentifier("event-section-\(section.lowercased())")
-            }
-        }
-        .padding(3)
-        .background(.quaternary.opacity(0.65), in: RoundedRectangle(cornerRadius: 9))
-        .frame(maxWidth: 650)
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Section")
     }
 }
 
@@ -309,6 +224,7 @@ private struct ReaderPane: View {
     @EnvironmentObject private var model: AppModel
     var event: EventCardModel
     var evidence: [StoredEventEvidence]
+    var backAction: () -> Void
     @State private var selection: ReaderSelectionContext?
     @State private var activatedLink: URL?
     @State private var linkPreview: LinkPreview?
@@ -320,25 +236,38 @@ private struct ReaderPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Menu("Selection actions") {
+            HStack(spacing: 12) {
+                Button(action: backAction) { Label("Back", systemImage: "chevron.left") }
+                Divider().frame(height: 18)
+                SourceMonogram(event.primarySource, size: 24)
+                Text(event.primarySource).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Spacer()
+                if !model.focusReading {
+                    Button { model.toggleSaved(event) } label: { Image(systemName: model.savedEventIDs.contains(event.id) ? "bookmark.fill" : "bookmark") }
+                        .help(model.savedEventIDs.contains(event.id) ? "Saved" : "Save")
+                    Button { model.setEventUnread(event) } label: { Image(systemName: "envelope.badge") }.help("Mark Unread")
+                    Button { openOriginal() } label: { Image(systemName: "safari") }.help("Open Original").disabled(event.originalURL == nil)
+                    Menu {
+                        Button("Summary") { show(String(localized: "Summary"), extractiveSummary) }
+                        Button("Key points") { show(String(localized: "Key points"), extractiveKeyPoints) }
+                        Button("Ask article") { runAI(task: .askArticle, title: String(localized: "Ask article"), input: event.summary) }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                }
+                Button { model.toggleFocusReading() } label: { Image(systemName: model.focusReading ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
+                    .help(model.focusReading ? "Exit Focus Reading" : "Focus Reading (⇧⌘F)")
+            }.padding(.horizontal, 12).frame(height: model.focusReading ? 38 : 44)
+            if selection != nil && !model.focusReading {
+                HStack(spacing: 8) {
+                    Text("Selected text").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     Button("Explain") { runSelection(.explain) }
                     Button("Translate") { runSelection(.translate) }
                     Button("Summarize") { runSelection(.summarize) }
                     Button("Ask AI") { runSelection(.askAI) }
-                }.disabled(selection == nil)
-                Menu("Article actions") {
-                    Button("Summary") { show(String(localized: "Summary"), extractiveSummary) }
-                    Button("Key points") { show(String(localized: "Key points"), extractiveKeyPoints) }
-                    Button("Ask article") { runAI(task: .askArticle, title: String(localized: "Ask article"), input: event.summary) }
-                    Divider()
-                    Button("Open original") { openOriginal() }.disabled(event.originalURL == nil)
+                    Spacer()
                 }
-                if let selection {
-                    Text("\(selection.span.utf8Length) bytes selected").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }.padding(10)
+                .buttonStyle(.borderless).controlSize(.small).padding(.horizontal, 12).padding(.vertical, 6)
+                .background(.quaternary.opacity(0.3))
+            }
             if let linkPreview {
                 HStack(spacing: 10) {
                     Image(systemName: "link")

@@ -114,6 +114,27 @@ func canonicalEvidenceBecomesEventTodayAndCurrentSearchWithoutAProvider() async 
 }
 
 @Test
+func todayExcludesHistoricalBackfillButIncludesARealNewPublication() async throws {
+    let (repository, _) = try makeRepository()
+    let sourceID = SourceID()
+    let endpointID = SourceEndpointID()
+    try await seedSource(repository, sourceID: sourceID, endpointID: endpointID, name: "Lilian's Log")
+    let now = Date.now
+    _ = try await seedItem(repository, sourceID: sourceID, endpointID: endpointID, externalID: "old-archive", title: "Archived diffusion model mathematics", text: "A historical tutorial derives score matching, stochastic differential equations, and image generation methods from an earlier research cycle.", publishedAt: now.addingTimeInterval(-500 * 86_400))
+    _ = try await seedItem(repository, sourceID: sourceID, endpointID: endpointID, externalID: "new-publication", title: "New evaluation method for reliable agents", text: "A newly published evaluation method measures reliable tool use with reproducible tests, independent evidence, and detailed failure analysis for production agent systems.", publishedAt: now.addingTimeInterval(-3_600))
+    _ = try await EvidenceEventMaintainer(repository: repository).run()
+    let snapshots = try await repository.currentEventSnapshots()
+    #expect(snapshots.contains { $0.meaningfulActivityAt == now.addingTimeInterval(-500 * 86_400) })
+    let update = try #require(try await TodayCoordinator(repository: repository).update(trigger: .opening, now: now))
+    let included = Set(update.revision.entries.map(\.eventRevisionID))
+    let old = try #require(snapshots.first { $0.aggregate.revision.title.contains("Archived") })
+    let fresh = try #require(snapshots.first { $0.aggregate.revision.title.contains("New evaluation") })
+    #expect(included.contains(old.aggregate.revision.id) == false)
+    #expect(included.contains(fresh.aggregate.revision.id))
+    #expect(Set(update.revision.entries.map(\.eventRevisionID)).count == update.revision.entries.count)
+}
+
+@Test
 func manualMergeAndSplitKeepHistoryAndCreateDurableConstraints() async throws {
     let (repository, _) = try makeRepository()
     let sourceID = SourceID()
@@ -345,11 +366,11 @@ private func seedSource(_ repository: CrosscurrentRepository, sourceID: SourceID
 }
 
 @discardableResult
-private func seedItem(_ repository: CrosscurrentRepository, sourceID: SourceID, endpointID: SourceEndpointID, externalID: String, title: String, text: String) async throws -> Item {
+private func seedItem(_ repository: CrosscurrentRepository, sourceID: SourceID, endpointID: SourceEndpointID, externalID: String, title: String, text: String, publishedAt: Date? = nil) async throws -> Item {
     let itemID = ItemID()
     let revisionID = ItemRevisionID()
     let item = Item(id: itemID, sourceID: sourceID, sourceEndpointID: endpointID, externalID: externalID, canonicalURL: URL(string: "https://example.com/\(externalID)"), currentRevisionID: revisionID)
-    let revision = ItemRevision(id: revisionID, itemID: itemID, title: title, fetchedAt: .now, languageCode: title.contains("上海") ? "zh-Hans" : "en", text: text, contentHash: "\(externalID)-hash")
+    let revision = ItemRevision(id: revisionID, itemID: itemID, title: title, publishedAt: publishedAt, fetchedAt: .now, languageCode: title.contains("上海") ? "zh-Hans" : "en", text: text, contentHash: "\(externalID)-hash")
     _ = try await repository.saveItem(item, revision: revision, segments: ItemSegmenter.segments(for: revision))
     return item
 }

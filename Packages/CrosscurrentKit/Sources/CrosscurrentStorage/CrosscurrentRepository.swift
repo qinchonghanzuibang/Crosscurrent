@@ -889,6 +889,43 @@ public actor CrosscurrentRepository {
         }
     }
 
+    /// Returns the endpoint's existing pending/retrying refresh, or creates one. A manual
+    /// refresh expedites a failed retry but never competes with an active lease.
+    public func scheduleRefreshJob(endpointID: SourceEndpointID, payload: Data, manual: Bool, now: Date = .now) throws -> DurableJob {
+        try mutateValue(domains: [.jobs]) { db in
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM jobs WHERE kind=? AND input_hash=? AND state IN ('pending','leased','failed') ORDER BY updated_at DESC LIMIT 1",
+                arguments: ["refresh", endpointID.description]
+            ) {
+                var existing = try Self.decodeJob(row: row)
+                if manual, existing.state == .failed {
+                    try db.execute(sql: "UPDATE jobs SET state='pending', next_attempt_at=?, updated_at=? WHERE id=?", arguments: [now.timeIntervalSince1970, now.timeIntervalSince1970, existing.id.description])
+                    existing.state = .pending
+                    existing.nextAttemptAt = now
+                }
+                return existing
+            }
+            let job = DurableJob(
+                kind: "refresh",
+                inputHash: endpointID.description,
+                idempotencyKey: "refresh:\(endpointID):\(UUID().uuidString.lowercased())",
+                payload: payload,
+                nextAttemptAt: now
+            )
+            try db.execute(
+                sql: """
+                INSERT INTO jobs
+                  (id, kind, input_hash, idempotency_key, payload, state, attempt_count, cancellation_requested,
+                   retry_class, checkpoint, next_attempt_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?)
+                """,
+                arguments: [job.id.description, job.kind, job.inputHash, job.idempotencyKey, job.payload, job.state.rawValue, job.attemptCount, now.timeIntervalSince1970, now.timeIntervalSince1970, now.timeIntervalSince1970]
+            )
+            return job
+        }!
+    }
+
     public func leaseNextJob(owner: String, eligibleKinds: Set<String>, duration: TimeInterval = 60, now: Date = .now) throws -> (DurableJob, JobLease)? {
         guard !eligibleKinds.isEmpty else { return nil }
         return try mutateValue(domains: [.jobs]) { db in
@@ -1003,6 +1040,16 @@ public actor CrosscurrentRepository {
             let valid = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM job_leases WHERE job_id=? AND owner=? AND token=?", arguments: [lease.jobID.description, lease.owner, lease.token.uuidString.lowercased()]) ?? 0
             guard valid == 1 else { throw CrosscurrentStorageError.jobLeaseUnavailable }
             try db.execute(sql: "UPDATE jobs SET state='failed', retry_class=?, checkpoint=?, next_attempt_at=?, updated_at=? WHERE id=?", arguments: [retryClass, checkpoint, retryAt.timeIntervalSince1970, Date.now.timeIntervalSince1970, lease.jobID.description])
+            try db.execute(sql: "DELETE FROM job_leases WHERE job_id=?", arguments: [lease.jobID.description])
+        }
+    }
+
+    @discardableResult
+    public func suspendJob(_ lease: JobLease, failureClass: String, checkpoint: Data? = nil) throws -> Bool {
+        try mutate(domains: [.jobs]) { db in
+            let valid = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM job_leases WHERE job_id=? AND owner=? AND token=?", arguments: [lease.jobID.description, lease.owner, lease.token.uuidString.lowercased()]) ?? 0
+            guard valid == 1 else { throw CrosscurrentStorageError.jobLeaseUnavailable }
+            try db.execute(sql: "UPDATE jobs SET state='cancelled', retry_class=?, checkpoint=?, updated_at=? WHERE id=?", arguments: [failureClass, checkpoint, Date.now.timeIntervalSince1970, lease.jobID.description])
             try db.execute(sql: "DELETE FROM job_leases WHERE job_id=?", arguments: [lease.jobID.description])
         }
     }
@@ -1485,6 +1532,21 @@ public actor CrosscurrentRepository {
                 let recentGroups: Int = velocityRow?["recent_groups"] ?? 0
                 let priorGroups: Int = velocityRow?["prior_groups"] ?? 0
                 let trendVelocity = recentGroups >= 2 ? min(1, Double(recentGroups) / max(2, Double(priorGroups) / 7)) : 0
+                let meaningfulTimestamp = try Double.fetchOne(
+                    db,
+                    sql: """
+                    SELECT MAX(CASE
+                      WHEN ir.revision_reason='initial' OR ir.ordinal=1 THEN ir.published_at
+                      WHEN ir.revision_reason IN ('contentUpdate','majorUpdate','correction')
+                        THEN COALESCE(ir.modified_at, ir.published_at, ir.fetched_at)
+                      ELSE NULL END)
+                    FROM event_revision_memberships rm
+                    JOIN event_membership_assertions m ON m.id=rm.membership_assertion_id
+                    JOIN item_revisions ir ON ir.id=m.item_revision_id
+                    WHERE rm.event_revision_id=? AND m.decision IN ('accepted','provisional')
+                    """,
+                    arguments: [revision.id.description]
+                )
                 let readRow = try Row.fetchOne(db, sql: "SELECT * FROM event_read_states WHERE event_id=?", arguments: [eventID.description])
                 let readState = EventReadState(
                     lastSeenRevisionID: Self.identifier(EventRevisionID.self, readRow?["last_seen_event_revision_id"] as String?),
@@ -1530,7 +1592,8 @@ public actor CrosscurrentRepository {
                     originalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
                     originalAccountID: Self.identifier(ConnectorAccountID.self, primary["account_id"] as String?),
                     chinaGlobalCoverageSufficient: coverageCounts[CoverageEcosystem.chinaFocused.rawValue, default: 0] >= 2 && coverageCounts[CoverageEcosystem.globalFocused.rawValue, default: 0] >= 2,
-                    readStatus: readState.status(currentRevisionID: revision.id, currentOrdinal: revision.ordinal, isReaderVisible: revision.changeKind.isReaderVisible)
+                    readStatus: readState.status(currentRevisionID: revision.id, currentOrdinal: revision.ordinal, isReaderVisible: revision.changeKind.isReaderVisible),
+                    meaningfulActivityAt: meaningfulTimestamp.map(Date.init(timeIntervalSince1970:))
                 )
             }
         }
@@ -2066,6 +2129,14 @@ public actor CrosscurrentRepository {
             try db.execute(sql: "UPDATE source_endpoints SET health=?, last_successful_sync=? WHERE id=?", arguments: [health.rawValue, completedAt.timeIntervalSince1970, endpointID.description])
             try db.execute(sql: "INSERT INTO sync_runs (id, endpoint_id, started_at, completed_at, result, item_count, error_class, checkpoint) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)", arguments: [UUID().uuidString.lowercased(), endpointID.description, startedAt.timeIntervalSince1970, completedAt.timeIntervalSince1970, health.rawValue, itemCount])
             try db.execute(sql: "INSERT INTO connector_health_events (id, endpoint_id, health, message, observed_at) VALUES (?, ?, ?, ?, ?)", arguments: [UUID().uuidString.lowercased(), endpointID.description, health.rawValue, message, completedAt.timeIntervalSince1970])
+        }
+    }
+
+    @discardableResult
+    public func recordSyncStarted(endpointID: SourceEndpointID, at date: Date = .now) throws -> Bool {
+        try mutate(domains: [.endpoints]) { db in
+            try db.execute(sql: "UPDATE source_endpoints SET health=? WHERE id=?", arguments: [ConnectorHealth.syncing.rawValue, endpointID.description])
+            try db.execute(sql: "INSERT INTO connector_health_events (id, endpoint_id, health, message, observed_at) VALUES (?, ?, ?, NULL, ?)", arguments: [UUID().uuidString.lowercased(), endpointID.description, ConnectorHealth.syncing.rawValue, date.timeIntervalSince1970])
         }
     }
 
