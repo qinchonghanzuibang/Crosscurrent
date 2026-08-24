@@ -228,10 +228,8 @@ private struct ReaderPane: View {
     @State private var selection: ReaderSelectionContext?
     @State private var activatedLink: URL?
     @State private var linkPreview: LinkPreview?
-    @State private var resultTitle = ""
-    @State private var resultText = ""
-    @State private var showResult = false
     @State private var showOriginal = false
+    @State private var readerFocusRequest = 0
     private let previewFetcher = LinkPreviewFetcher()
 
     var body: some View {
@@ -247,12 +245,12 @@ private struct ReaderPane: View {
                         .help(model.savedEventIDs.contains(event.id) ? "Saved" : "Save")
                     Button { model.setEventUnread(event) } label: { Image(systemName: "envelope.badge") }.help("Mark Unread")
                     Button { openOriginal() } label: { Image(systemName: "safari") }.help("Open Original").disabled(event.originalURL == nil)
-                    Menu {
-                        Button("Summary") { show(String(localized: "Summary"), extractiveSummary) }
-                        Button("Key points") { show(String(localized: "Key points"), extractiveKeyPoints) }
-                        Button("Ask article") { runAI(task: .askArticle, title: String(localized: "Ask article"), input: event.summary) }
-                    } label: { Image(systemName: "ellipsis.circle") }
                 }
+                Menu {
+                    Button("Summary") { openSummary() }
+                    Button("Key points") { openKeyPoints() }
+                    Button("Ask article") { openAskArticle() }
+                } label: { Image(systemName: "ellipsis.circle") }
                 Button { model.toggleFocusReading() } label: { Image(systemName: model.focusReading ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
                     .help(model.focusReading ? "Exit Focus Reading" : "Focus Reading (⇧⌘F)")
             }.padding(.horizontal, 12).frame(height: model.focusReading ? 38 : 44)
@@ -280,18 +278,45 @@ private struct ReaderPane: View {
                 }.padding(10).background(.quaternary.opacity(0.35))
             }
             Divider()
-            ReaderWebView(
-                document: ReaderDocument(id: event.revisionID.description, title: event.title, byline: event.primarySource, sanitizedHTML: event.bodyHTML, itemRevisionID: event.primaryItemRevisionID),
-                selection: $selection,
-                activatedLink: $activatedLink
-            )
+            HStack(spacing: 0) {
+                ReaderWebView(
+                    document: ReaderDocument(id: event.revisionID.description, title: event.title, byline: event.primarySource, sanitizedHTML: event.bodyHTML, itemRevisionID: event.primaryItemRevisionID),
+                    selection: $selection,
+                    activatedLink: $activatedLink,
+                    focusRequest: readerFocusRequest,
+                    onEscape: {
+                        if model.handleReaderEscape() == .navigateBack { backAction() }
+                    }
+                )
+                if let insights = model.readerInsights {
+                    Divider()
+                    ReaderInsightsPanel(
+                        state: insights,
+                        onClose: model.dismissReaderInsights,
+                        onRetry: retryInsights,
+                        onAsk: runArticleQuestion
+                    )
+                    .frame(minWidth: 320, idealWidth: 370, maxWidth: 420, maxHeight: .infinity)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.18), value: model.readerInsights?.id)
         }
         .task(id: activatedLink) {
             guard let activatedLink else { linkPreview = nil; return }
             do { linkPreview = try await previewFetcher.preview(for: activatedLink) }
-            catch { show(String(localized: "Link preview unavailable"), error.localizedDescription) }
+            catch {
+                model.presentReaderInsights(ReaderInsightsState(
+                    kind: .linkPreview,
+                    title: String(localized: "Link preview unavailable"),
+                    phase: .error,
+                    message: error.localizedDescription
+                ))
+            }
         }
-        .alert(resultTitle, isPresented: $showResult) { Button("OK", role: .cancel) {} } message: { Text(resultText) }
+        .onChange(of: model.readerInsights?.id) { oldValue, newValue in
+            if oldValue != nil, newValue == nil { readerFocusRequest += 1 }
+        }
         .sheet(isPresented: $showOriginal) {
             if let url = activatedLink ?? event.originalURL {
                 PublicOriginalWebView(url: url).frame(minWidth: 900, minHeight: 650)
@@ -299,29 +324,115 @@ private struct ReaderPane: View {
         }
     }
 
-    private var extractiveSummary: String {
-        guard let primary = evidence.first(where: \.isPrimary) ?? evidence.first else { return event.summary }
-        return "\(primary.excerpt)\n\n[\(citation(primary))]"
+    private var extractiveSummary: [ReaderInsightPoint] {
+        ReaderExtractiveInsights.summary(from: insightEvidence, fallback: event.summary)
     }
 
-    private var extractiveKeyPoints: String {
-        let selected = evidence.reduce(into: [StoredEventEvidence]()) { values, assertion in
-            guard values.count < 3, !values.contains(where: { $0.excerpt == assertion.excerpt }) else { return }
-            values.append(assertion)
+    private var extractiveKeyPoints: [ReaderInsightPoint] {
+        ReaderExtractiveInsights.keyPoints(from: insightEvidence, fallback: event.summary)
+    }
+
+    private var insightEvidence: [ReaderEvidenceExcerpt] {
+        let articleText = ReaderTextExtractor.plainText(fromSanitizedHTML: event.bodyHTML)
+        var values: [ReaderEvidenceExcerpt] = []
+        if !articleText.isEmpty {
+            values.append(ReaderEvidenceExcerpt(
+                text: articleText,
+                citation: "\(event.primarySource) · E1",
+                isPrimary: true
+            ))
         }
-        guard !selected.isEmpty else { return event.summary }
-        return selected.map { "• \($0.excerpt)\n  [\(citation($0))]" }.joined(separator: "\n")
+        values.append(contentsOf: evidence.enumerated().compactMap { index, assertion in
+            guard !assertion.isPrimary || articleText.isEmpty else { return nil }
+            return ReaderEvidenceExcerpt(
+                text: assertion.excerpt,
+                citation: "\(assertion.sourceName) · E\(articleText.isEmpty ? index + 1 : index + 2)",
+                isPrimary: assertion.isPrimary
+            )
+        })
+        return values.isEmpty ? [ReaderEvidenceExcerpt(text: event.summary, citation: "\(event.primarySource) · E1", isPrimary: true)] : values
     }
 
-    private func citation(_ assertion: StoredEventEvidence) -> String {
-        let end = assertion.span.utf8Start + assertion.span.utf8Length
-        return "\(assertion.sourceName) · ItemRevision \(assertion.itemRevisionID.description) · bytes \(assertion.span.utf8Start)–\(end)"
+    private var modelEvidenceInput: String {
+        insightEvidence.enumerated().map { index, value in
+            "[E\(index + 1)] \(value.citation)\n\(value.text)"
+        }.joined(separator: "\n\n")
+    }
+
+    private func openSummary() {
+        let state = ReaderInsightsState(
+            kind: .summary,
+            title: String(localized: "Summary"),
+            phase: model.providerConfigured ? .loading : .ready,
+            points: extractiveSummary,
+            message: model.providerConfigured ? nil : String(localized: "Created locally from article evidence.")
+        )
+        model.presentReaderInsights(state)
+        guard model.providerConfigured else { return }
+        Task { await generateSummary(state) }
+    }
+
+    private func generateSummary(_ state: ReaderInsightsState) async {
+        do {
+            let response = try await model.performAI(task: .articleSummary, input: modelEvidenceInput, event: event)
+            guard let concise = ReaderExtractiveInsights.validatedSummary(response) else { throw AIProviderError.invalidResponse }
+            var ready = state
+            ready.phase = .ready
+            ready.body = concise
+            ready.points = []
+            ready.message = String(localized: "Generated from the cited article evidence.")
+            model.updateReaderInsights(ready)
+        } catch {
+            model.updateReaderInsights(failureState(from: state, error: error, fallback: extractiveSummary))
+        }
+    }
+
+    private func openKeyPoints() {
+        let state = ReaderInsightsState(
+            kind: .keyPoints,
+            title: String(localized: "Key points"),
+            phase: model.providerConfigured ? .loading : .ready,
+            points: extractiveKeyPoints,
+            message: model.providerConfigured ? nil : String(localized: "Created locally from article evidence.")
+        )
+        model.presentReaderInsights(state)
+        guard model.providerConfigured else { return }
+        Task { await generateKeyPoints(state) }
+    }
+
+    private func generateKeyPoints(_ state: ReaderInsightsState) async {
+        do {
+            let response = try await model.performAI(task: .keyPoints, input: modelEvidenceInput, event: event)
+            guard let points = ReaderExtractiveInsights.validatedKeyPoints(response) else { throw AIProviderError.invalidResponse }
+            var ready = state
+            ready.phase = .ready
+            ready.points = points.map { ReaderInsightPoint(text: $0) }
+            ready.message = String(localized: "Generated from the cited article evidence.")
+            model.updateReaderInsights(ready)
+        } catch {
+            model.updateReaderInsights(failureState(from: state, error: error, fallback: extractiveKeyPoints))
+        }
+    }
+
+    private func openAskArticle() {
+        model.presentReaderInsights(ReaderInsightsState(
+            kind: .askArticle,
+            title: String(localized: "Ask article"),
+            phase: model.providerConfigured ? .ready : .unavailable,
+            message: model.providerConfigured
+                ? String(localized: "Ask a question grounded in this article’s evidence.")
+                : String(localized: "Configure an AI provider to ask questions. Summary and Key Points remain available locally.")
+        ))
     }
 
     private func runSelection(_ action: ReaderSelectionAction) {
         guard let selection else { return }
         if action == .summarize {
-            show(String(localized: "Summarize"), selection.selectedText)
+            let points = ReaderExtractiveInsights.summary(
+                from: [ReaderEvidenceExcerpt(text: selection.selectedText, citation: String(localized: "Selected passage"), isPrimary: true)],
+                fallback: selection.selectedText
+            )
+            model.presentReaderInsights(ReaderInsightsState(kind: .selectionSummary, title: String(localized: "Summarize"), phase: .ready, points: points))
         } else {
             let task: AITask = switch action {
             case .explain: .explainSelection
@@ -329,7 +440,16 @@ private struct ReaderPane: View {
             case .askAI: .askSelection
             case .summarize: .summarizeSelection
             }
-            runAI(task: task, title: actionTitle(action), input: selection.selectedText)
+            runAI(task: task, kind: insightKind(action), title: actionTitle(action), input: selection.selectedText)
+        }
+    }
+
+    private func insightKind(_ action: ReaderSelectionAction) -> ReaderInsightKind {
+        switch action {
+        case .explain: .selectionExplain
+        case .translate: .selectionTranslation
+        case .summarize: .selectionSummary
+        case .askAI: .selectionAnswer
         }
     }
 
@@ -342,15 +462,79 @@ private struct ReaderPane: View {
         }
     }
 
-    private func runAI(task: AITask, title: String, input: String) {
-        guard model.providerConfigured else {
-            show(title, String(localized: "Configure an AI provider to use this action. Reading, search, ranking, and extractive summaries remain available."))
-            return
-        }
+    private func runAI(task: AITask, kind: ReaderInsightKind, title: String, input: String) {
+        let state = ReaderInsightsState(
+            kind: kind,
+            title: title,
+            phase: model.providerConfigured ? .loading : .unavailable,
+            message: model.providerConfigured ? nil : String(localized: "Configure an AI provider to use this action.")
+        )
+        model.presentReaderInsights(state)
+        guard model.providerConfigured else { return }
         Task {
-            do { show(title, try await model.performAI(task: task, input: input, event: event)) }
-            catch { show(title, error.localizedDescription) }
+            do {
+                var ready = state
+                ready.phase = .ready
+                ready.body = try await model.performAI(task: task, input: input, event: event)
+                model.updateReaderInsights(ready)
+            } catch {
+                model.updateReaderInsights(failureState(from: state, error: error))
+            }
         }
+    }
+
+    private func runArticleQuestion(_ question: String) {
+        guard let current = model.readerInsights, current.kind == .askArticle else { return }
+        var loading = current
+        loading.phase = .loading
+        loading.body = ""
+        loading.message = nil
+        model.updateReaderInsights(loading)
+        Task {
+            do {
+                var ready = loading
+                ready.phase = .ready
+                ready.body = try await model.performAI(
+                    task: .askArticle,
+                    input: "Question: \(question)\n\nArticle evidence:\n\(modelEvidenceInput)",
+                    event: event
+                )
+                model.updateReaderInsights(ready)
+            } catch {
+                model.updateReaderInsights(failureState(from: loading, error: error))
+            }
+        }
+    }
+
+    private func retryInsights() {
+        guard let state = model.readerInsights else { return }
+        switch state.kind {
+        case .summary: openSummary()
+        case .keyPoints: openKeyPoints()
+        default: break
+        }
+    }
+
+    private func failureState(from state: ReaderInsightsState, error: Error, fallback: [ReaderInsightPoint] = []) -> ReaderInsightsState {
+        var failed = state
+        failed.points = fallback
+        failed.message = error.localizedDescription
+        failed.canRetry = state.kind == .summary || state.kind == .keyPoints
+        if let providerError = error as? AIProviderError {
+            switch providerError {
+            case .configurationRequired:
+                failed.phase = .unavailable
+                failed.canRetry = false
+            case .policyDenied:
+                failed.phase = .denied
+                failed.canRetry = false
+            default:
+                failed.phase = .error
+            }
+        } else {
+            failed.phase = .error
+        }
+        return failed
     }
 
     private func openOriginal() {
@@ -363,9 +547,91 @@ private struct ReaderPane: View {
         }
     }
 
-    private func show(_ title: String, _ text: String) {
-        resultTitle = title
-        resultText = text
-        showResult = true
+}
+
+private struct ReaderInsightsPanel: View {
+    var state: ReaderInsightsState
+    var onClose: () -> Void
+    var onRetry: () -> Void
+    var onAsk: (String) -> Void
+    @State private var question = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label("Insights", systemImage: "sparkles")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onClose) { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+                    .help("Close Insights (Esc)")
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 44)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(state.title).font(.title2.bold())
+                    if state.phase == .loading {
+                        HStack(spacing: 10) {
+                            ProgressView().controlSize(.small)
+                            Text("Working from article evidence…").foregroundStyle(.secondary)
+                        }
+                    }
+                    if !state.body.isEmpty {
+                        Text(state.body).textSelection(.enabled).lineSpacing(3)
+                    }
+                    if !state.points.isEmpty {
+                        if state.kind == .keyPoints {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(Array(state.points.enumerated()), id: \.offset) { _, point in
+                                    HStack(alignment: .top, spacing: 9) {
+                                        Text("•").font(.headline).foregroundStyle(CrosscurrentColor.accent)
+                                        insightPoint(point)
+                                    }
+                                }
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 14) {
+                                ForEach(Array(state.points.enumerated()), id: \.offset) { _, point in insightPoint(point) }
+                            }
+                        }
+                    }
+                    if state.kind == .askArticle, state.phase != .loading, state.phase != .unavailable, state.phase != .denied, state.body.isEmpty {
+                        TextField("Ask about this article", text: $question, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(2...5)
+                        Button("Ask", systemImage: "arrow.up.circle.fill") {
+                            let value = question.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !value.isEmpty else { return }
+                            onAsk(value)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    if let message = state.message {
+                        Label(message, systemImage: state.phase == .denied ? "hand.raised" : state.phase == .error ? "exclamationmark.circle" : "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(state.phase == .error ? .orange : .secondary)
+                    }
+                    if state.canRetry { Button("Retry", systemImage: "arrow.clockwise", action: onRetry) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(18)
+            }
+        }
+        .background(.background)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Reader Insights")
+    }
+
+    private func insightPoint(_ point: ReaderInsightPoint) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(point.text).textSelection(.enabled).lineSpacing(2)
+            if let citation = point.citation {
+                Text(citation).font(.caption2.weight(.medium)).foregroundStyle(CrosscurrentColor.accent)
+            }
+        }
     }
 }

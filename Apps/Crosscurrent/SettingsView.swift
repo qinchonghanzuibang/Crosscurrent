@@ -243,6 +243,7 @@ private extension AITask {
         case .eventTitle: String(localized: "Event title")
         case .eventSynthesis: String(localized: "Event synthesis")
         case .ambiguousClustering: String(localized: "Ambiguous clustering")
+        case .articleSummary: String(localized: "Article summary")
         case .keyPoints: String(localized: "Key points")
         case .translation: String(localized: "Translation")
         case .explainSelection: String(localized: "Explain selection")

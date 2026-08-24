@@ -164,11 +164,27 @@ import Testing
     let person = Entity(currentRevisionID: entityRevisionID, kind: .person, displayName: "Lilian Weng", isFollowed: false)
     _ = try await repository.saveEntity(person, revision: EntityRevision(id: entityRevisionID, entityID: person.id, displayName: person.displayName))
     _ = try await repository.saveSourceEntityRelationship(SourceEntityRelationship(sourceID: source.id, entityID: person.id, role: .represents, provenance: .connector, confidence: .certain))
+    let secondSourceRevision = SourceRevision(sourceID: SourceID(), displayName: "Lilian Weng on another network")
+    let secondSource = LogicalSource(id: secondSourceRevision.sourceID, currentRevisionID: secondSourceRevision.id, kind: .person, isFollowed: false)
+    _ = try await repository.saveSource(secondSource, revision: secondSourceRevision)
+    _ = try await repository.saveSourceEntityRelationship(SourceEntityRelationship(sourceID: secondSource.id, entityID: person.id, role: .represents, provenance: .connector, confidence: .certain))
+    let topicRevisionID = TopicRevisionID()
+    let topic = Topic(currentRevisionID: topicRevisionID, isFollowed: false)
+    _ = try await repository.saveTopic(topic, revision: TopicRevision(id: topicRevisionID, topicID: topic.id, name: "AI Agents"))
     _ = try await repository.setSourceFollowed(source.id, followed: true)
-    let storedSource = try #require(try await repository.sourceSnapshots().first)
-    let storedPerson = try #require(try await repository.entitySnapshots().first)
-    #expect(storedSource.source.isFollowed)
-    #expect(storedPerson.entity.isFollowed == false)
+    #expect(try await repository.followedSourceSnapshots().map(\.id) == [source.id])
+    #expect(try await repository.followedEntitySnapshots().isEmpty)
+    #expect(try await repository.followedTopicSnapshots().isEmpty)
+
+    _ = try await repository.setEntityFollowed(person.id, followed: true)
+    #expect(try await repository.followedEntitySnapshots().map(\.id) == [person.id])
+    #expect(try await repository.sourceSnapshots().first(where: { $0.id == secondSource.id })?.source.isFollowed == false)
+
+    _ = try await repository.setTopicFollowed(topic.id, followed: true)
+    let explicitUnion = Set(try await repository.followedSourceSnapshots().map { "source:\($0.id)" })
+        .union(try await repository.followedEntitySnapshots().map { "person:\($0.id)" })
+        .union(try await repository.followedTopicSnapshots().map { "topic:\($0.id)" })
+    #expect(explicitUnion.count == 3)
 }
 
 @Test func aiCacheAndConsentRemainPromptAndPolicyRevisionAware() async throws {

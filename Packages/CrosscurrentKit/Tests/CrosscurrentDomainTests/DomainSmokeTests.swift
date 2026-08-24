@@ -13,6 +13,39 @@ import Testing
     #expect(BundledPromptCatalog.all.allSatisfy { $0.revision.origin == .bundled })
 }
 
+@Test func readerEscapeClosesInsightsBeforeLeavingFocusMode() {
+    let insight = ReaderInsightsState(kind: .summary, title: "Summary", phase: .ready, body: "Concise result")
+    var state = ReaderExperienceState(isFocusReading: true, insights: insight)
+    #expect(state.handleEscape() == .closedInsights)
+    #expect(state.insights == nil)
+    #expect(state.isFocusReading)
+    #expect(state.handleEscape() == .exitedFocus)
+    #expect(state.isFocusReading == false)
+    #expect(state.handleEscape() == .navigateBack)
+}
+
+@Test func providerFreeReaderInsightsStayBoundedAndStructured() {
+    let article = """
+    The research team released a bilingual retrieval model with reproducible evaluation code. Independent tests found that it improved Chinese-to-English recall without increasing the index dimension. The report shows that batching reduced refresh time while preserving ranking quality. However, the authors found that very long inputs still require careful truncation. A follow-up benchmark compared the model with two compact baselines on older Apple silicon. The results show lower memory use during routine indexing. The team published the tokenizer configuration and checksums for independent verification. Therefore, adopters can reproduce the measured tradeoffs before selecting a runtime.
+    """
+    let evidence = [ReaderEvidenceExcerpt(text: article, citation: "Primary · E1", isPrimary: true)]
+    let summary = ReaderExtractiveInsights.summary(from: evidence, fallback: article)
+    let points = ReaderExtractiveInsights.keyPoints(from: evidence, fallback: article)
+    #expect((1...3).contains(summary.count))
+    #expect(summary.map(\.text).joined(separator: " ").count <= 720)
+    #expect(points.count == 8)
+    #expect(points.allSatisfy { $0.citation == "Primary · E1" })
+    #expect(ReaderExtractiveInsights.validatedSummary(article) == nil)
+    #expect(ReaderExtractiveInsights.validatedKeyPoints(points.map { "• \($0.text)" }.joined(separator: "\n"))?.count == 8)
+
+    let initials = ReaderExtractiveInsights.summary(
+        from: [ReaderEvidenceExcerpt(text: "The concept dates back to I. J. Good (1965), who defined an ultratelligent machine. Modern systems extend that idea with measurable evaluations.", citation: "E1", isPrimary: true)],
+        fallback: ""
+    )
+    #expect(initials.first?.text.contains("I. J. Good (1965)") == true)
+    #expect(initials.contains { $0.text.hasSuffix("I.") } == false)
+}
+
 @Test func aiEndpointsRequireHTTPSExceptForLoopbackServices() throws {
     try AIEndpointSecurity.validate(#require(URL(string: "https://api.example.com/v1/messages")))
     try AIEndpointSecurity.validate(#require(URL(string: "http://127.0.0.1:11434/api/chat")))

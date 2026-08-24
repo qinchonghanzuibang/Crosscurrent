@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AITask: String, Codable, CaseIterable, Sendable {
-    case eventTitle, eventSynthesis, ambiguousClustering, keyPoints, translation
+    case eventTitle, eventSynthesis, ambiguousClustering, articleSummary, keyPoints, translation
     case explainSelection, summarizeSelection, askSelection, askArticle, digestSynthesis, chinaGlobalComparison
 }
 

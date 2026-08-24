@@ -25,15 +25,21 @@ public struct ReaderWebView: NSViewRepresentable {
     public var document: ReaderDocument
     @Binding private var selection: ReaderSelectionContext?
     @Binding private var activatedLink: URL?
+    private var focusRequest: Int
+    private var onEscape: () -> Void
 
     public init(
         document: ReaderDocument,
         selection: Binding<ReaderSelectionContext?> = .constant(nil),
-        activatedLink: Binding<URL?> = .constant(nil)
+        activatedLink: Binding<URL?> = .constant(nil),
+        focusRequest: Int = 0,
+        onEscape: @escaping () -> Void = {}
     ) {
         self.document = document
         _selection = selection
         _activatedLink = activatedLink
+        self.focusRequest = focusRequest
+        self.onEscape = onEscape
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -53,16 +59,22 @@ public struct ReaderWebView: NSViewRepresentable {
             forMainFrameOnly: true,
             in: world
         ))
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = ReaderEscapeWebView(frame: .zero, configuration: configuration)
+        view.onEscape = onEscape
         view.navigationDelegate = context.coordinator
         view.setValue(false, forKey: "drawsBackground")
         return view
     }
 
     public func updateNSView(_ webView: WKWebView, context: Context) {
+        (webView as? ReaderEscapeWebView)?.onEscape = onEscape
         context.coordinator.selection = $selection
         context.coordinator.activatedLink = $activatedLink
         context.coordinator.itemRevisionID = document.itemRevisionID
+        if context.coordinator.focusRequest != focusRequest {
+            context.coordinator.focusRequest = focusRequest
+            DispatchQueue.main.async { webView.window?.makeFirstResponder(webView) }
+        }
         let loadIdentity = document.id + ":" + String(document.sanitizedHTML.hashValue)
         guard context.coordinator.loadedIdentity != loadIdentity else { return }
         context.coordinator.loadedIdentity = loadIdentity
@@ -96,6 +108,7 @@ public struct ReaderWebView: NSViewRepresentable {
         fileprivate var selection: Binding<ReaderSelectionContext?>
         fileprivate var activatedLink: Binding<URL?>
         fileprivate var itemRevisionID = ItemRevisionID()
+        fileprivate var focusRequest = 0
         fileprivate var loadedIdentity: String?
         fileprivate var renderTask: Task<Void, Never>?
 
@@ -167,6 +180,18 @@ public struct ReaderWebView: NSViewRepresentable {
       });
     })();
     """#
+}
+
+private final class ReaderEscapeWebView: WKWebView {
+    var onEscape: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        guard event.keyCode == 53 else {
+            super.keyDown(with: event)
+            return
+        }
+        onEscape?()
+    }
 }
 
 public struct PublicOriginalWebView: NSViewRepresentable {
