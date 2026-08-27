@@ -38,9 +38,16 @@ final class AgentRuntime: NSObject, @unchecked Sendable {
             jobTask = Task {
                 do {
                     let browser = BrowserCreatorSessionXPCClient(teamID: teamID, signingMode: CCSigningEnvironment.currentMode)
+                    let secretStore = KeychainSecretStore(accessGroup: Self.sharedKeychainAccessGroup(teamID: teamID))
+                    let weChatProvider = JizhilaWeChatIndexProvider(credentials: {
+                        let key = try await secretStore.data(account: "wechat-index.jizhila.api-key").flatMap { String(data: $0, encoding: .utf8) }
+                        let verifyCode = try await secretStore.data(account: "wechat-index.jizhila.verify-code").flatMap { String(data: $0, encoding: .utf8) }
+                        guard let key, !key.isEmpty else { return nil }
+                        return WeChatProviderCredentials(apiKey: key, verificationCode: verifyCode)
+                    })
                     let blobStore = CanonicalBlobStore(locations: locations, repository: repository)
                     let http = ArchivingConnectorHTTPClient(repository: repository, blobStore: blobStore)
-                    let registry = await ConnectorCatalog.production(browser: browser, http: http)
+                    let registry = await ConnectorCatalog.production(browser: browser, weChatProvider: weChatProvider, http: http)
                     let refreshExecutor = RefreshJobExecutor(repository: repository, connectors: registry, blobStore: blobStore, http: http)
                     let shareImporter = ShareInboxImporter(locations: locations, repository: repository, leaseOwner: "agent-share-import")
                     let maintainer = EvidenceEventMaintainer(repository: repository)
@@ -157,8 +164,9 @@ final class AgentRuntime: NSObject, @unchecked Sendable {
         let snapshots = try await repository.sourceSnapshots()
         for snapshot in snapshots where !snapshot.source.isArchived {
             for endpoint in snapshot.endpoints {
-                guard endpoint.lastSuccessfulSync.map({ now.timeIntervalSince($0) >= 30 * 60 }) ?? true,
-                      ![ConnectorHealth.authenticationRequired, .platformChanged, .temporarilyUnavailable, .error, .disabled].contains(endpoint.health),
+                let refreshInterval: TimeInterval = endpoint.connector == .weChatOfficialAccount ? 4 * 60 * 60 : 30 * 60
+                guard endpoint.lastSuccessfulSync.map({ now.timeIntervalSince($0) >= refreshInterval }) ?? true,
+                      ![ConnectorHealth.authenticationRequired, .platformChanged, .configurationRequired, .temporarilyUnavailable, .error, .disabled].contains(endpoint.health),
                       await registry.connector(for: endpoint.connector) != nil
                 else { continue }
                 let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpoint.id))
@@ -196,6 +204,12 @@ final class AgentRuntime: NSObject, @unchecked Sendable {
         content.userInfo = ["deepLink": value.deepLink]
         content.sound = .default
         try await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
+    private static func sharedKeychainAccessGroup(teamID: String) -> String? {
+        let value = teamID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value != "TEAMID_REQUIRED" else { return nil }
+        return "\(value).com.chonghanqin.crosscurrent.shared"
     }
 }
 

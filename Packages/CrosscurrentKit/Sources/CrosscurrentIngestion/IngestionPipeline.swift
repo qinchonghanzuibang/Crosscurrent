@@ -79,7 +79,8 @@ public actor IngestionPipeline {
                 text: normalizedText,
                 sanitizedHTML: sanitizedHTML,
                 contentHash: contentHash,
-                changeKind: existing == nil ? .initial : .contentUpdate
+                changeKind: existing == nil ? .initial : .contentUpdate,
+                acquisitionProvenance: candidate.acquisitionProvenance
             )
             let previousSegments: [ItemSegment]
             if let existing {

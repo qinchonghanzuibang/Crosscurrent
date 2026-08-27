@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 enum CanonicalSchema {
-    static let version = 6
+    static let version = 7
 
     static func migrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -46,7 +46,51 @@ enum CanonicalSchema {
             try db.execute(sql: "ALTER TABLE provider_configs ADD COLUMN retry_at REAL")
             try db.execute(sql: "PRAGMA user_version = 6")
         }
+        migrator.registerMigration("canonical-v7-public-wechat") { db in
+            try db.execute(sql: "ALTER TABLE item_revisions ADD COLUMN acquisition_provenance TEXT")
+            try migrateWeChatEndpointSemantics(db)
+            try db.execute(sql: "PRAGMA user_version = 7")
+        }
         return migrator
+    }
+
+    static func migrateWeChatEndpointSemantics(_ db: Database, now: Date = .now) throws {
+        try db.execute(
+            sql: """
+            UPDATE source_endpoints
+            SET account_id=NULL, access_requirement='anonymous', content_privacy='public',
+                health=CASE WHEN health IN ('authenticationRequired','platformChanged') THEN 'healthy' ELSE health END,
+                last_successful_sync=NULL
+            WHERE connector_kind='weChatOfficialAccount'
+            """
+        )
+        try db.execute(
+            sql: "DELETE FROM sync_cursors WHERE endpoint_id IN (SELECT id FROM source_endpoints WHERE connector_kind='weChatOfficialAccount')"
+        )
+        let sourceIDs = try String.fetchAll(
+            db,
+            sql: "SELECT DISTINCT source_id FROM source_endpoints WHERE connector_kind='weChatOfficialAccount'"
+        )
+        for sourceID in sourceIDs {
+            let supersedes = try String.fetchOne(
+                db,
+                sql: "SELECT id FROM source_ai_classifications WHERE source_id=? AND is_current=1 ORDER BY created_at DESC LIMIT 1",
+                arguments: [sourceID]
+            )
+            try db.execute(
+                sql: "UPDATE source_ai_classifications SET is_current=0 WHERE source_id=? AND is_current=1",
+                arguments: [sourceID]
+            )
+            try db.execute(
+                sql: """
+                INSERT INTO source_ai_classifications
+                  (id, source_id, access_requirement, content_privacy, provenance, confidence,
+                   created_at, supersedes_id, is_current)
+                VALUES (?, ?, 'anonymous', 'public', 'connector', 1.0, ?, ?, 1)
+                """,
+                arguments: [UUID().uuidString.lowercased(), sourceID, now.timeIntervalSince1970, supersedes]
+            )
+        }
     }
 
     static let statements: [String] = [

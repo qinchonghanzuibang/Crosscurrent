@@ -359,10 +359,11 @@ public actor CrosscurrentRepository {
                 sql: """
                 INSERT OR IGNORE INTO item_revisions
                   (id, item_id, ordinal, title, author, published_at, modified_at, fetched_at, language_code,
-                   plain_text, sanitized_html_blob_id, evidence_blob_id, content_hash, extraction_state, revision_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'normalized', ?)
+                   plain_text, sanitized_html_blob_id, evidence_blob_id, content_hash, extraction_state, revision_reason,
+                   acquisition_provenance)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'normalized', ?, ?)
                 """,
-                arguments: [revision.id.description, item.id.description, revision.ordinal, revision.title, revision.author, revision.publishedAt?.timeIntervalSince1970, revision.modifiedAt?.timeIntervalSince1970, revision.fetchedAt.timeIntervalSince1970, revision.languageCode, revision.text, sanitizedHTMLBlobID?.description, evidenceBlobID?.description, revision.contentHash, revision.changeKind.rawValue]
+                arguments: [revision.id.description, item.id.description, revision.ordinal, revision.title, revision.author, revision.publishedAt?.timeIntervalSince1970, revision.modifiedAt?.timeIntervalSince1970, revision.fetchedAt.timeIntervalSince1970, revision.languageCode, revision.text, sanitizedHTMLBlobID?.description, evidenceBlobID?.description, revision.contentHash, revision.changeKind.rawValue, revision.acquisitionProvenance?.rawValue]
             )
             for (ordinal, segment) in segments.enumerated() {
                 try db.execute(
@@ -1192,6 +1193,7 @@ public actor CrosscurrentRepository {
                        ir.id AS revision_id, ir.ordinal AS revision_ordinal, ir.title, ir.author,
                        ir.published_at, ir.modified_at, ir.fetched_at, ir.language_code,
                        ir.plain_text, ir.content_hash AS revision_hash, ir.revision_reason,
+                       ir.acquisition_provenance,
                        seg.id AS segment_id, seg.lineage_id, seg.kind AS segment_kind,
                        seg.utf8_start, seg.utf8_length, seg.heading_path, seg.segment_hash,
                        seg.text AS segment_text, sr.display_name AS source_name
@@ -1235,7 +1237,8 @@ public actor CrosscurrentRepository {
                     text: row["plain_text"],
                     sanitizedHTML: nil,
                     contentHash: row["revision_hash"],
-                    changeKind: changeKind
+                    changeKind: changeKind,
+                    acquisitionProvenance: (row["acquisition_provenance"] as String?).flatMap(ContentAcquisitionProvenance.init(rawValue:))
                 )
                 let segmentHash: String = row["segment_hash"]
                 let segment = ItemSegment(
@@ -2133,12 +2136,16 @@ public actor CrosscurrentRepository {
     }
 
     @discardableResult
-    public func finishSync(endpointID: SourceEndpointID, cursor: StoredSyncCursor?, itemCount: Int, health: ConnectorHealth = .healthy, message: String? = nil, startedAt: Date, completedAt: Date = .now) throws -> Bool {
+    public func finishSync(endpointID: SourceEndpointID, cursor: StoredSyncCursor?, itemCount: Int, health: ConnectorHealth = .healthy, message: String? = nil, recordsSuccessfulRefresh: Bool = true, startedAt: Date, completedAt: Date = .now) throws -> Bool {
         try mutate(domains: [.endpoints, .jobs]) { db in
             if let cursor {
                 try db.execute(sql: "INSERT INTO sync_cursors (endpoint_id, cursor_family, cursor_data, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(endpoint_id) DO UPDATE SET cursor_family=excluded.cursor_family, cursor_data=excluded.cursor_data, updated_at=excluded.updated_at", arguments: [endpointID.description, cursor.family, cursor.data, completedAt.timeIntervalSince1970])
             }
-            try db.execute(sql: "UPDATE source_endpoints SET health=?, last_successful_sync=? WHERE id=?", arguments: [health.rawValue, completedAt.timeIntervalSince1970, endpointID.description])
+            if recordsSuccessfulRefresh {
+                try db.execute(sql: "UPDATE source_endpoints SET health=?, last_successful_sync=? WHERE id=?", arguments: [health.rawValue, completedAt.timeIntervalSince1970, endpointID.description])
+            } else {
+                try db.execute(sql: "UPDATE source_endpoints SET health=? WHERE id=?", arguments: [health.rawValue, endpointID.description])
+            }
             try db.execute(sql: "INSERT INTO sync_runs (id, endpoint_id, started_at, completed_at, result, item_count, error_class, checkpoint) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)", arguments: [UUID().uuidString.lowercased(), endpointID.description, startedAt.timeIntervalSince1970, completedAt.timeIntervalSince1970, health.rawValue, itemCount])
             try db.execute(sql: "INSERT INTO connector_health_events (id, endpoint_id, health, message, observed_at) VALUES (?, ?, ?, ?, ?)", arguments: [UUID().uuidString.lowercased(), endpointID.description, health.rawValue, message, completedAt.timeIntervalSince1970])
         }

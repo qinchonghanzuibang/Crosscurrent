@@ -27,7 +27,7 @@ public actor ArticleContentEnricher {
         // Website candidates contain the fetched document. Feed entries commonly
         // contain only a description; fetch the canonical article when the body is
         // absent or clearly excerpt-sized.
-        if connector != .website, existingText.count < 1_200,
+        if connector != .website, html == nil, existingText.count < 1_200,
            let url = candidate.canonicalURL,
            ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
             let response = try await http.get(url, headers: ["Accept": "text/html,application/xhtml+xml;q=0.9"])
@@ -38,6 +38,17 @@ public actor ArticleContentEnricher {
         }
 
         guard let html, !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return candidate }
+        if connector == .weChatOfficialAccount {
+            let result = try WeChatHTMLPreprocessor.articleContent(from: html, baseURL: candidate.canonicalURL)
+            guard result.plainText.count >= max(80, existingText.count) else { return candidate }
+            enriched.title = Self.preferredTitle(extracted: result.title, original: candidate.title)
+            enriched.contentHTML = result.sanitizedHTML
+            enriched.contentText = result.plainText
+            if enriched.summary?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                enriched.summary = String(result.plainText.prefix(500))
+            }
+            return enriched
+        }
         do {
             let extractor = await SafeHTMLExtractor()
             let result = try await extractor.extract(untrustedHTML: html, baseURL: candidate.canonicalURL)
@@ -62,7 +73,7 @@ public actor ArticleContentEnricher {
 
     private static func supportsArticleExtraction(_ connector: ConnectorKind) -> Bool {
         switch connector {
-        case .rss, .atom, .jsonFeed, .website, .importedURL, .shareExtension: true
+        case .rss, .atom, .jsonFeed, .website, .weChatOfficialAccount, .importedURL, .shareExtension: true
         default: false
         }
     }
