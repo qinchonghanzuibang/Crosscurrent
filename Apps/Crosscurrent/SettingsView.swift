@@ -14,6 +14,9 @@ struct SettingsView: View {
     @State private var providerModel = "qwen3:4b"
     @State private var providerSecret = ""
     @State private var providerStatus = ""
+    @State private var weChatAPIKey = ""
+    @State private var weChatVerificationCode = ""
+    @State private var weChatConfigurationStatus = ""
     @State private var confirmsCacheClear = false
     @State private var confirmsDeleteAll = false
 
@@ -51,6 +54,29 @@ struct SettingsView: View {
                 HStack { Button("Enable Agent") { enableAgent() }; Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() } }
                 LabeledContent("Authenticated Browser Sessions", value: model.browserWorkerState)
                 Button("Enable Browser Session Owner") { enableBrowserWorker() }
+                Section("Advanced WeChat Index") {
+                    LabeledContent("Direct provider", value: "Jizhila · BYOK")
+                    LabeledContent("Status", value: model.weChatIndexStatus)
+                    SecureField("API key", text: $weChatAPIKey)
+                    SecureField("Optional verification code", text: $weChatVerificationCode)
+                    HStack {
+                        Button("Check configuration") {
+                            Task { weChatConfigurationStatus = await model.testWeChatIndexConfiguration() }
+                        }
+                        Button("Save") {
+                            Task {
+                                weChatConfigurationStatus = await model.saveWeChatIndex(apiKey: weChatAPIKey, verificationCode: weChatVerificationCode)
+                                weChatAPIKey = ""
+                                weChatVerificationCode = ""
+                            }
+                        }
+                    }
+                    Text("The key stays in Keychain. Official Account search and history requests are paid provider calls; Crosscurrent never uses WeChat login, QR codes, or browser sessions.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if !weChatConfigurationStatus.isEmpty {
+                        Text(weChatConfigurationStatus).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 LabeledContent("Updates", value: model.updateStatus)
                 Button("Check for Updates…") { model.checkForUpdates() }
                 if let startupError = model.startupError { Text(startupError).foregroundStyle(.red).font(.caption) }

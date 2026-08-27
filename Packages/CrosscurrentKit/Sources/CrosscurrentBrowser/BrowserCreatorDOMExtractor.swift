@@ -24,7 +24,6 @@ public enum BrowserCreatorDOMExtractor {
 
     public static func loginURL(for platform: AuthenticatedCreatorPlatform) -> URL {
         switch platform {
-        case .weChatOfficialAccount: URL(string: "https://mp.weixin.qq.com/")!
         case .xiaohongshu: URL(string: "https://www.xiaohongshu.com/explore")!
         case .x: URL(string: "https://x.com/login")!
         case .weibo: URL(string: "https://weibo.com/")!

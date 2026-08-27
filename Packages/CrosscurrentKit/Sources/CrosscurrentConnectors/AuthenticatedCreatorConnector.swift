@@ -2,7 +2,6 @@ import Foundation
 import CrosscurrentDomain
 
 public enum AuthenticatedCreatorPlatform: String, Codable, CaseIterable, Sendable {
-    case weChatOfficialAccount
     case xiaohongshu
     case x
     case weibo
@@ -10,7 +9,6 @@ public enum AuthenticatedCreatorPlatform: String, Codable, CaseIterable, Sendabl
 
     public var connectorKind: ConnectorKind {
         switch self {
-        case .weChatOfficialAccount: .weChatOfficialAccount
         case .xiaohongshu: .xiaohongshu
         case .x: .x
         case .weibo: .weibo
@@ -121,7 +119,6 @@ public actor AuthenticatedCreatorConnector: Connector {
     private static func accepts(url: URL, platform: AuthenticatedCreatorPlatform) -> Bool {
         let host = url.host?.lowercased() ?? ""
         switch platform {
-        case .weChatOfficialAccount: return host == "mp.weixin.qq.com" || host.hasSuffix(".weixin.qq.com")
         case .xiaohongshu: return host == "xiaohongshu.com" || host.hasSuffix(".xiaohongshu.com") || host == "xhslink.com"
         case .x: return host == "x.com" || host == "twitter.com" || host.hasSuffix(".twitter.com")
         case .weibo: return host == "weibo.com" || host.hasSuffix(".weibo.com")

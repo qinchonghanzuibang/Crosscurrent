@@ -18,13 +18,15 @@ public enum SourceDiscoveryAction: String, Codable, CaseIterable, Sendable {
 /// A non-mutating discovery result. Callers must explicitly commit one of the
 /// advertised actions before the Source or any sample Item is persisted.
 public struct SourceDiscoveryPreview: Codable, Hashable, Sendable {
-    public var inputURL: URL
+    public var inputURL: URL?
+    public var inputQuery: String?
     public var connectorKind: ConnectorKind
     public var result: ConnectorDiscoveryResult
     public var availableActions: [SourceDiscoveryAction]
 
-    public init(inputURL: URL, connectorKind: ConnectorKind, result: ConnectorDiscoveryResult, availableActions: [SourceDiscoveryAction]) {
+    public init(inputURL: URL? = nil, inputQuery: String? = nil, connectorKind: ConnectorKind, result: ConnectorDiscoveryResult, availableActions: [SourceDiscoveryAction]) {
         self.inputURL = inputURL
+        self.inputQuery = inputQuery
         self.connectorKind = connectorKind
         self.result = result
         self.availableActions = availableActions
@@ -64,6 +66,15 @@ public actor SourceDiscoveryService {
         throw lastError
     }
 
+    public func search(_ query: String, context: ConnectorContext) async throws -> [SourceDiscoveryPreview] {
+        guard let connectors else { throw ConnectorError.temporarilyUnavailable }
+        let normalized = query.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return [] }
+        return try await connectors.search(query: normalized, context: context).map { kind, result in
+            SourceDiscoveryPreview(inputQuery: normalized, connectorKind: kind, result: result, availableActions: [.subscribe])
+        }
+    }
+
     /// Compatibility entry point for bulk importers. Interactive UI must use
     /// `preview` followed by `commit(_:action:)` so discovery never subscribes
     /// merely because a URL was inspected.
@@ -85,7 +96,7 @@ public actor SourceDiscoveryService {
         }
         return try await commit(
             result,
-            idempotencyPrefix: "discover:\(preview.connectorKind.rawValue):\(action.rawValue):\(preview.inputURL.absoluteString)"
+            idempotencyPrefix: "discover:\(preview.connectorKind.rawValue):\(action.rawValue):\(preview.inputURL?.absoluteString ?? preview.inputQuery ?? result.endpoints.first?.externalID ?? result.source.id.description)"
         )
     }
 

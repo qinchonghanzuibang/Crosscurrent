@@ -3,6 +3,11 @@ import Foundation
 public enum RemoteItemState: String, Codable, CaseIterable, Sendable {
     case available, deleted, unavailable, unknown
 }
+public enum ContentAcquisitionProvenance: String, Codable, CaseIterable, Sendable {
+    case officialHTTP
+    case providerFallback
+    case connectorPayload
+}
 public enum RevisionChangeKind: String, Codable, CaseIterable, Sendable {
     case initial, minorMetadata, contentUpdate, majorUpdate, correction, merge, split
 
@@ -58,8 +63,9 @@ public struct ItemRevision: Identifiable, Codable, Hashable, Sendable {
     public var sanitizedHTML: String?
     public var contentHash: String
     public var changeKind: RevisionChangeKind
+    public var acquisitionProvenance: ContentAcquisitionProvenance?
 
-    public init(id: ItemRevisionID = ItemRevisionID(), itemID: ItemID, ordinal: Int = 1, title: String, author: String? = nil, publishedAt: Date? = nil, modifiedAt: Date? = nil, fetchedAt: Date = .now, languageCode: String? = nil, text: String, sanitizedHTML: String? = nil, contentHash: String, changeKind: RevisionChangeKind = .initial) {
+    public init(id: ItemRevisionID = ItemRevisionID(), itemID: ItemID, ordinal: Int = 1, title: String, author: String? = nil, publishedAt: Date? = nil, modifiedAt: Date? = nil, fetchedAt: Date = .now, languageCode: String? = nil, text: String, sanitizedHTML: String? = nil, contentHash: String, changeKind: RevisionChangeKind = .initial, acquisitionProvenance: ContentAcquisitionProvenance? = nil) {
         self.id = id
         self.itemID = itemID
         self.ordinal = ordinal
@@ -73,6 +79,7 @@ public struct ItemRevision: Identifiable, Codable, Hashable, Sendable {
         self.sanitizedHTML = sanitizedHTML
         self.contentHash = contentHash
         self.changeKind = changeKind
+        self.acquisitionProvenance = acquisitionProvenance
     }
 }
 

@@ -133,12 +133,12 @@ func readerRendersEveryFormulaInARealWorldParagraph() async {
 @Test func authenticatedPlatformCaptureFixturesAreVersionedAndSecretRedacted() throws {
     let fixture = BrowserPlatformCaptureFixture(
         schemaVersion: 1,
-        platform: .weChatOfficialAccount,
+        platform: .xiaohongshu,
         kind: .listing,
-        finalURLWithoutQuery: try #require(URL(string: "https://mp.weixin.qq.com/profile")),
+        finalURLWithoutQuery: try #require(URL(string: "https://www.xiaohongshu.com/user/profile/example")),
         title: "Account listing",
         topLevelElementCounts: ["article": 5],
-        resourceOrigins: ["https://res.wx.qq.com"]
+        resourceOrigins: ["https://sns-webpic-qc.xhscdn.com"]
     )
     let data = try JSONEncoder().encode(BrowserWorkerResponse.captureFixture(fixture))
     let decoded = try JSONDecoder().decode(BrowserWorkerResponse.self, from: data)
@@ -149,7 +149,7 @@ func readerRendersEveryFormulaInARealWorldParagraph() async {
     #expect(value.schemaVersion == 1)
     #expect(value.finalURLWithoutQuery.query == nil)
     #expect(value.finalURLWithoutQuery.fragment == nil)
-    #expect(value.resourceOrigins == ["https://res.wx.qq.com"])
+    #expect(value.resourceOrigins == ["https://sns-webpic-qc.xhscdn.com"])
 }
 
 // WKWebView cannot launch its content process in every command-line/sandbox test host. Release

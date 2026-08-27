@@ -73,12 +73,14 @@ public actor RefreshJobExecutor {
         var pages = 0
         var candidateCount = 0
         var revisionCount = 0
+        var performedRemoteRequest = false
 
         while pages < payload.maximumPages {
             if try await repository.cancellationRequested(for: lease) { throw JobExecutionError.cancelled }
             if lease.expiresAt.timeIntervalSinceNow < 30 { lease = try await repository.renewLease(lease, duration: 120) }
 
             let page = try await connector.refresh(endpoint: endpoint, cursor: cursor, context: ConnectorContext())
+            performedRemoteRequest = performedRemoteRequest || page.performedRemoteRequest
             let remaining = payload.maximumItems.map { max(0, $0 - candidateCount) } ?? page.candidates.count
             for candidate in page.candidates.prefix(remaining) {
                 let fetched = try await connector.fetchContent(candidate: candidate, context: ConnectorContext())
@@ -94,7 +96,13 @@ public actor RefreshJobExecutor {
         }
 
         let stored = cursor.map { StoredSyncCursor(family: $0.family, data: $0.value) }
-        _ = try await repository.finishSync(endpointID: endpoint.id, cursor: stored, itemCount: candidateCount, startedAt: startedAt)
+        _ = try await repository.finishSync(
+            endpointID: endpoint.id,
+            cursor: stored,
+            itemCount: candidateCount,
+            recordsSuccessfulRefresh: performedRemoteRequest,
+            startedAt: startedAt
+        )
         return RefreshJobCheckpoint(pages: pages, candidates: candidateCount, itemRevisions: revisionCount, cursor: stored)
     }
 }
@@ -108,6 +116,12 @@ public enum JobRetryClassifier {
         switch error {
         case ConnectorError.authenticationRequired, ConnectorError.interactionRequired:
             name = "authentication"; base = 60 * 60
+        case ConnectorError.configurationRequired, ConnectorError.quotaExhausted:
+            name = "configuration"; base = 24 * 60 * 60
+        case ConnectorError.accountUnavailable:
+            name = "accountUnavailable"; base = 24 * 60 * 60
+        case ConnectorError.articleUnavailable:
+            name = "articleUnavailable"; base = 6 * 60 * 60
         case let ConnectorError.rateLimited(retryAfter):
             name = "rateLimit"; base = retryAfter ?? 15 * 60; isTransient = true; honorsRetryAfter = retryAfter != nil
         case let ConnectorError.transientHTTP(_, retryAfter):
@@ -134,6 +148,8 @@ public enum RefreshFailureHealthClassifier {
     public static func health(for error: Error, attempt: Int, hasCachedSuccess: Bool) -> ConnectorHealth {
         switch error {
         case ConnectorError.authenticationRequired, ConnectorError.interactionRequired: .authenticationRequired
+        case ConnectorError.configurationRequired, ConnectorError.quotaExhausted: .configurationRequired
+        case ConnectorError.accountUnavailable: .error
         case ConnectorError.rateLimited: hasCachedSuccess && attempt < 3 ? .retrying : .rateLimited
         case ConnectorError.transientHTTP: hasCachedSuccess && attempt < 3 ? .retrying : .temporarilyUnavailable
         case ConnectorError.platformChanged: .platformChanged

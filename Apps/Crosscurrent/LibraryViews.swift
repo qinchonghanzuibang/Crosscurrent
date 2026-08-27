@@ -118,6 +118,7 @@ struct SourcesView: View {
     @State private var exportingOPML = false
     @State private var exportDocument = OPMLExportDocument(data: Data())
     @State private var selectedStarterURLs: Set<String> = []
+    @State private var discoveryTask: Task<Void, Never>?
     private var visibleSources: [StoredSourceSnapshot] {
         followedOnly ? model.sources.filter(\.source.isFollowed) : model.sources
     }
@@ -174,10 +175,10 @@ struct SourcesView: View {
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                     .multilineTextAlignment(.trailing)
-                                if let message = health.lastFailureMessage, [.authenticationRequired, .platformChanged, .error, .temporarilyUnavailable].contains(health.health) {
+                                if let message = health.lastFailureMessage, [.authenticationRequired, .platformChanged, .configurationRequired, .error, .temporarilyUnavailable].contains(health.health) {
                                     Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
                                 }
-                                if [.authenticationRequired, .platformChanged, .error, .temporarilyUnavailable].contains(health.health) {
+                                if [.authenticationRequired, .platformChanged, .configurationRequired, .error, .temporarilyUnavailable].contains(health.health) {
                                     StatusPill(health.health.displayName, color: .orange)
                                 }
                             }
@@ -212,9 +213,49 @@ struct SourcesView: View {
         .sheet(isPresented: Binding(get: { adding || model.presentsAddSource }, set: { value in adding = value; model.presentsAddSource = value })) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Add Source").font(.title.bold())
-                TextField("Feed, creator, repository, or webpage URL", text: $url).textFieldStyle(.roundedBorder)
-                Text("WeChat Official Accounts and Xiaohongshu creators use the authenticated BrowserWorker; URL capture remains supplementary.").font(.caption).foregroundStyle(.secondary)
-                if model.sourcePreview == nil {
+                TextField("Official Account name or Source URL", text: $url)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { submitDiscovery() }
+                Text("Search an Official Account by name, or paste a feed, creator, repository, webpage, or public WeChat article URL. Searches run only when you submit.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !model.sourceSearchResults.isEmpty {
+                    ScrollView {
+                        LazyVStack(spacing: 10) {
+                            ForEach(model.sourceSearchResults, id: \.result.source.id) { result in
+                                HStack(spacing: 12) {
+                                    AsyncImage(url: result.result.sourceRevision.avatarURL) { image in
+                                        image.resizable().scaledToFill()
+                                    } placeholder: {
+                                        SourceMonogram(result.result.sourceRevision.displayName, size: 42)
+                                    }
+                                    .frame(width: 42, height: 42)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(result.result.sourceRevision.displayName).font(.headline)
+                                        if let identity = result.result.display?.identity { Text(identity).font(.caption).foregroundStyle(.secondary) }
+                                        Text(result.result.display?.detail ?? result.result.sourceRevision.summary ?? String(localized: "WeChat Official Account"))
+                                            .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                        Text(result.result.display?.category == "WeChat Official Account" ? String(localized: "WeChat Official Account") : result.result.display?.category ?? String(localized: "WeChat Official Account"))
+                                            .font(.caption2).foregroundStyle(.tertiary)
+                                    }
+                                    Spacer()
+                                    Button("Follow") {
+                                        model.selectSourceSearchResult(result)
+                                        Task {
+                                            status = await model.subscribeSourcePreview(action: .subscribe)
+                                            if model.sourcePreview == nil { dismissAddSource(); url = "" }
+                                        }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                                .padding(10)
+                                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 280)
+                }
+                if model.sourcePreview == nil && model.sourceSearchResults.isEmpty {
                     GroupBox("Optional starter Sources") {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(Self.starterSources, id: \.url) { starter in
@@ -249,9 +290,9 @@ struct SourcesView: View {
                         SourceMonogram(preview.result.sourceRevision.displayName, size: 38)
                         VStack(alignment: .leading, spacing: 5) {
                             Text(preview.result.sourceRevision.displayName).font(.headline)
-                            Text(preview.result.sourceRevision.summary ?? preview.inputURL.absoluteString)
+                            Text(preview.result.sourceRevision.summary ?? preview.inputURL?.absoluteString ?? preview.inputQuery ?? "")
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                            Text("\(preview.connectorKind.rawValue) · \(preview.result.recentCandidates.count) recent samples")
+                            Text(preview.result.display?.category ?? "\(preview.connectorKind.rawValue) · \(preview.result.recentCandidates.count) recent samples")
                                 .font(.caption2).foregroundStyle(.tertiary)
                         }
                     }
@@ -276,7 +317,7 @@ struct SourcesView: View {
                     Spacer()
                     Button("Cancel") { model.clearSourcePreview(); dismissAddSource() }
                     if model.sourcePreview == nil {
-                        Button("Preview") { Task { status = await model.previewSource(url); selectedAction = model.sourcePreview?.availableActions.first ?? .subscribe } }
+                        Button(isSubmittedURL ? "Preview" : "Search") { submitDiscovery() }
                             .keyboardShortcut(.defaultAction)
                             .disabled(url.isEmpty || model.sourceDiscoveryInProgress)
                     } else {
@@ -291,7 +332,7 @@ struct SourcesView: View {
                         .disabled(model.sourceDiscoveryInProgress)
                     }
                 }
-            }.padding(24).frame(width: 560)
+            }.padding(24).frame(width: 620)
         }
         .fileImporter(isPresented: $importingOPML, allowedContentTypes: [.xml, .data], allowsMultipleSelection: false) { result in
             guard case let .success(urls) = result, let selected = urls.first else {
@@ -306,8 +347,24 @@ struct SourcesView: View {
     }
 
     private func dismissAddSource() {
+        discoveryTask?.cancel()
         adding = false
         model.presentsAddSource = false
+    }
+
+    private var isSubmittedURL: Bool {
+        guard let value = URL(string: url.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+        return ["http", "https"].contains(value.scheme?.lowercased() ?? "") && value.host != nil
+    }
+
+    private func submitDiscovery() {
+        discoveryTask?.cancel()
+        let input = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        discoveryTask = Task {
+            if isSubmittedURL { status = await model.previewSource(input) }
+            else { status = await model.searchSources(input) }
+            selectedAction = model.sourcePreview?.availableActions.first ?? .subscribe
+        }
     }
 
     private static let starterSources = [
@@ -365,6 +422,7 @@ private extension ConnectorHealth {
         case .rateLimited: String(localized: "Rate limited")
         case .temporarilyUnavailable: String(localized: "Temporarily unavailable")
         case .platformChanged: String(localized: "Platform changed")
+        case .configurationRequired: String(localized: "Configuration required")
         case .error: String(localized: "Error")
         case .disabled: String(localized: "Disabled")
         }

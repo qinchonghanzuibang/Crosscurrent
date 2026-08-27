@@ -15,6 +15,7 @@ public struct ConnectorCapabilities: OptionSet, Codable, Hashable, Sendable {
     public static let deletionSignals = Self(rawValue: 1 << 6)
     public static let engagementMetrics = Self(rawValue: 1 << 7)
     public static let backgroundRefresh = Self(rawValue: 1 << 8)
+    public static let queryDiscovery = Self(rawValue: 1 << 9)
 }
 
 public struct ConnectorDiscoveryInput: Codable, Hashable, Sendable {
@@ -38,8 +39,9 @@ public struct ConnectorDiscoveryResult: Codable, Hashable, Sendable {
     public var aiClassification: SourceAIClassification
     public var coverageCandidate: SourceCoverageAssertion
     public var recentCandidates: [ConnectorItemCandidate]
+    public var display: ConnectorDiscoveryDisplay?
 
-    public init(source: LogicalSource, sourceRevision: SourceRevision, endpoints: [SourceEndpoint], entityCandidates: [Entity] = [], sourceEntityRelationships: [SourceEntityRelationship] = [], aiClassification: SourceAIClassification, coverageCandidate: SourceCoverageAssertion, recentCandidates: [ConnectorItemCandidate] = []) {
+    public init(source: LogicalSource, sourceRevision: SourceRevision, endpoints: [SourceEndpoint], entityCandidates: [Entity] = [], sourceEntityRelationships: [SourceEntityRelationship] = [], aiClassification: SourceAIClassification, coverageCandidate: SourceCoverageAssertion, recentCandidates: [ConnectorItemCandidate] = [], display: ConnectorDiscoveryDisplay? = nil) {
         self.source = source
         self.sourceRevision = sourceRevision
         self.endpoints = endpoints
@@ -48,6 +50,19 @@ public struct ConnectorDiscoveryResult: Codable, Hashable, Sendable {
         self.aiClassification = aiClassification
         self.coverageCandidate = coverageCandidate
         self.recentCandidates = recentCandidates
+        self.display = display
+    }
+}
+
+public struct ConnectorDiscoveryDisplay: Codable, Hashable, Sendable {
+    public var category: String
+    public var identity: String?
+    public var detail: String?
+
+    public init(category: String, identity: String? = nil, detail: String? = nil) {
+        self.category = category
+        self.identity = identity
+        self.detail = detail
     }
 }
 
@@ -84,8 +99,9 @@ public struct ConnectorItemCandidate: Codable, Hashable, Sendable {
     public var topicNames: [String]
     public var metricSnapshots: [ConnectorMetric]
     public var deletionState: RemoteItemState
+    public var acquisitionProvenance: ContentAcquisitionProvenance?
 
-    public init(externalID: String, canonicalURL: URL? = nil, title: String, author: String? = nil, publishedAt: Date? = nil, modifiedAt: Date? = nil, summary: String? = nil, contentHTML: String? = nil, contentText: String? = nil, languageCode: String? = nil, topicNames: [String] = [], metricSnapshots: [ConnectorMetric] = [], deletionState: RemoteItemState = .available) {
+    public init(externalID: String, canonicalURL: URL? = nil, title: String, author: String? = nil, publishedAt: Date? = nil, modifiedAt: Date? = nil, summary: String? = nil, contentHTML: String? = nil, contentText: String? = nil, languageCode: String? = nil, topicNames: [String] = [], metricSnapshots: [ConnectorMetric] = [], deletionState: RemoteItemState = .available, acquisitionProvenance: ContentAcquisitionProvenance? = nil) {
         self.externalID = externalID
         self.canonicalURL = canonicalURL
         self.title = title
@@ -99,6 +115,7 @@ public struct ConnectorItemCandidate: Codable, Hashable, Sendable {
         self.topicNames = topicNames
         self.metricSnapshots = metricSnapshots
         self.deletionState = deletionState
+        self.acquisitionProvenance = acquisitionProvenance
     }
 }
 
@@ -121,12 +138,27 @@ public struct ConnectorRefreshPage: Codable, Hashable, Sendable {
     public var nextCursor: ConnectorCursor?
     public var reachedEnd: Bool
     public var deletionExternalIDs: [String]
+    public var performedRemoteRequest: Bool
 
-    public init(candidates: [ConnectorItemCandidate], nextCursor: ConnectorCursor? = nil, reachedEnd: Bool, deletionExternalIDs: [String] = []) {
+    public init(candidates: [ConnectorItemCandidate], nextCursor: ConnectorCursor? = nil, reachedEnd: Bool, deletionExternalIDs: [String] = [], performedRemoteRequest: Bool = true) {
         self.candidates = candidates
         self.nextCursor = nextCursor
         self.reachedEnd = reachedEnd
         self.deletionExternalIDs = deletionExternalIDs
+        self.performedRemoteRequest = performedRemoteRequest
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case candidates, nextCursor, reachedEnd, deletionExternalIDs, performedRemoteRequest
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        candidates = try container.decode([ConnectorItemCandidate].self, forKey: .candidates)
+        nextCursor = try container.decodeIfPresent(ConnectorCursor.self, forKey: .nextCursor)
+        reachedEnd = try container.decode(Bool.self, forKey: .reachedEnd)
+        deletionExternalIDs = try container.decodeIfPresent([String].self, forKey: .deletionExternalIDs) ?? []
+        performedRemoteRequest = try container.decodeIfPresent(Bool.self, forKey: .performedRemoteRequest) ?? true
     }
 }
 
@@ -152,6 +184,10 @@ public enum ConnectorError: LocalizedError, Equatable {
     case policyDenied(String)
     case invalidResponse(String)
     case temporarilyUnavailable
+    case configurationRequired(String)
+    case quotaExhausted
+    case accountUnavailable
+    case articleUnavailable(definitive: Bool)
 
     public var errorDescription: String? {
         switch self {
@@ -164,8 +200,16 @@ public enum ConnectorError: LocalizedError, Equatable {
         case let .policyDenied(message): "Connector policy denied the operation: \(message)"
         case let .invalidResponse(message): "The connector returned an invalid response: \(message)"
         case .temporarilyUnavailable: "The connector is temporarily unavailable."
+        case let .configurationRequired(message): message
+        case .quotaExhausted: "The configured provider balance is exhausted."
+        case .accountUnavailable: "This Official Account is unavailable or has migrated."
+        case .articleUnavailable: "This article is temporarily unavailable."
         }
     }
+}
+
+public protocol QueryDiscoveringConnector: Connector {
+    func search(query: String, context: ConnectorContext) async throws -> [ConnectorDiscoveryResult]
 }
 
 public protocol Connector: Sendable {
@@ -190,4 +234,14 @@ public actor ConnectorRegistry {
 
     public func connector(for kind: ConnectorKind) -> (any Connector)? { connectors[kind] }
     public func availableKinds() -> Set<ConnectorKind> { Set(connectors.keys) }
+
+    public func search(query: String, context: ConnectorContext) async throws -> [(ConnectorKind, ConnectorDiscoveryResult)] {
+        var output: [(ConnectorKind, ConnectorDiscoveryResult)] = []
+        for kind in connectors.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            guard let connector = connectors[kind], connector.capabilities.contains(.queryDiscovery),
+                  let searchable = connector as? any QueryDiscoveringConnector else { continue }
+            output += try await searchable.search(query: query, context: context).map { (kind, $0) }
+        }
+        return output
+    }
 }

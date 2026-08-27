@@ -12,6 +12,8 @@
   and explicit invalidation/refetch.
 - BrowserWorker exclusively owns authenticated WKWebsiteDataStore profiles.
   Never export cookies as the authentication architecture.
+- WeChat Official Accounts use only anonymous public HTTP plus the configured
+  index provider. Never route WeChat through BrowserWorker, QR login, or cookies.
 - Authenticate XPC peers by exact signing requirement and Team ID. App Group
   membership and Mach-service names are not authentication.
 - Redact secrets before persisting HTTP metadata, not only before logging.

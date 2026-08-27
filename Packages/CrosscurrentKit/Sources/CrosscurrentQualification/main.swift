@@ -96,7 +96,8 @@ private struct CrosscurrentQualificationCommand {
         let repository = CrosscurrentRepository(database: database, writerInstance: "qualification-\(UUID().uuidString.lowercased())")
         let blobs = CanonicalBlobStore(locations: locations, repository: repository)
         let http = ArchivingConnectorHTTPClient(repository: repository, blobStore: blobs)
-        let registry = await ConnectorCatalog.production(browser: UnavailableBrowser(), http: http)
+        let weChatProvider = JizhilaWeChatIndexProvider(credentials: { nil })
+        let registry = await ConnectorCatalog.production(browser: UnavailableBrowser(), weChatProvider: weChatProvider, http: http)
         let discovery = SourceDiscoveryService(repository: repository, connectors: registry, blobStore: blobs, http: http)
         let refresh = RefreshJobExecutor(repository: repository, connectors: registry, blobStore: blobs, http: http)
 

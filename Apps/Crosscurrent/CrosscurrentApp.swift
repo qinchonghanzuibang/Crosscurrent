@@ -100,7 +100,10 @@ final class AppModel: ObservableObject {
     @Published var events: [EventCardModel] = []
     @Published var digestSections: [DigestSection: [EventCardModel]] = [:]
     @Published var sourcePreview: SourceDiscoveryPreview?
+    @Published var sourceSearchResults: [SourceDiscoveryPreview] = []
     @Published var sourceDiscoveryInProgress = false
+    @Published var weChatIndexConfigured = false
+    @Published var weChatIndexStatus = String(localized: "Not configured")
     @Published var digestRevisionReason: DigestRevisionReason = .initialDaily
     @Published var digestUpdatedAt = Date.now
     @Published var providerConfigured = false
@@ -149,6 +152,8 @@ final class AppModel: ObservableObject {
     private var pollingTask: Task<Void, Never>?
     private var observedGenerations: [ChangeDomain: Int64] = [:]
     private let keychain = KeychainSecretStore()
+    private var weChatKeychain: KeychainSecretStore?
+    private var weChatProvider: (any WeChatIndexProvider)?
     private var pendingBrowserAccounts: [AuthenticatedCreatorPlatform: ConnectorAccountID] = [:]
     private var destinationBeforeEvent: SidebarDestination = .today
 
@@ -194,8 +199,19 @@ final class AppModel: ObservableObject {
             let http = ArchivingConnectorHTTPClient(repository: repository, blobStore: blobStore)
             let browser = BrowserCreatorSessionXPCClient(teamID: teamID.isEmpty ? "TEAMID_REQUIRED" : teamID, signingMode: CCSigningEnvironment.currentMode)
             browserClient = browser
+            let weChatKeychain = KeychainSecretStore(accessGroup: Self.sharedKeychainAccessGroup(teamID: teamID))
+            self.weChatKeychain = weChatKeychain
+            let weChatProvider = JizhilaWeChatIndexProvider(credentials: {
+                let key = try await weChatKeychain.data(account: Self.weChatAPIKeyAccount).flatMap { String(data: $0, encoding: .utf8) }
+                let verifyCode = try await weChatKeychain.data(account: Self.weChatVerifyCodeAccount).flatMap { String(data: $0, encoding: .utf8) }
+                guard let key, !key.isEmpty else { return nil }
+                return WeChatProviderCredentials(apiKey: key, verificationCode: verifyCode)
+            })
+            self.weChatProvider = weChatProvider
+            weChatIndexConfigured = await weChatProvider.healthCheck() == .configured
+            weChatIndexStatus = weChatIndexConfigured ? String(localized: "Configured") : String(localized: "Not configured")
             diagnosticCaptureDirectory = locations.container.appending(path: "Diagnostics/PlatformCaptures", directoryHint: .isDirectory)
-            let connectors = await ConnectorCatalog.production(browser: browser, http: http)
+            let connectors = await ConnectorCatalog.production(browser: browser, weChatProvider: weChatProvider, http: http)
             refreshExecutor = RefreshJobExecutor(repository: repository, connectors: connectors, blobStore: blobStore, http: http)
             discoveryService = SourceDiscoveryService(repository: repository, connectors: connectors, blobStore: blobStore, http: http)
             let maintainer = EvidenceEventMaintainer(repository: repository)
@@ -620,6 +636,52 @@ final class AppModel: ObservableObject {
         } catch { startupError = error.localizedDescription; return error.localizedDescription }
     }
 
+    func saveWeChatIndex(apiKey: String, verificationCode: String) async -> String {
+        guard let weChatKeychain else { return String(localized: "Storage is not ready") }
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let code = verificationCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            if key.isEmpty {
+                try await weChatKeychain.remove(account: Self.weChatAPIKeyAccount)
+                try await weChatKeychain.remove(account: Self.weChatVerifyCodeAccount)
+                weChatIndexConfigured = false
+                weChatIndexStatus = String(localized: "Not configured")
+                return String(localized: "WeChat Index configuration removed.")
+            }
+            try await weChatKeychain.put(Data(key.utf8), account: Self.weChatAPIKeyAccount)
+            if code.isEmpty { try await weChatKeychain.remove(account: Self.weChatVerifyCodeAccount) }
+            else { try await weChatKeychain.put(Data(code.utf8), account: Self.weChatVerifyCodeAccount) }
+            weChatIndexConfigured = await weChatProvider?.healthCheck() == .configured
+            weChatIndexStatus = weChatIndexConfigured ? String(localized: "Configured") : String(localized: "Configuration unavailable")
+            return String(localized: "WeChat Index configuration saved in Keychain.")
+        } catch {
+            weChatIndexConfigured = false
+            weChatIndexStatus = error.localizedDescription
+            return error.localizedDescription
+        }
+    }
+
+    func testWeChatIndexConfiguration() async -> String {
+        guard let weChatProvider else { return String(localized: "Source discovery is not ready.") }
+        switch await weChatProvider.healthCheck() {
+        case .configured:
+            weChatIndexConfigured = true
+            weChatIndexStatus = String(localized: "Configured")
+            return String(localized: "The API key is available to Crosscurrent. Account search performs the first paid request.")
+        case .missingConfiguration:
+            weChatIndexConfigured = false
+            weChatIndexStatus = String(localized: "Not configured")
+            return String(localized: "Enter and save an API key.")
+        case .quotaExhausted:
+            weChatIndexConfigured = true
+            weChatIndexStatus = String(localized: "Provider balance exhausted")
+            return weChatIndexStatus
+        case .temporarilyUnavailable:
+            weChatIndexStatus = String(localized: "Configuration unavailable")
+            return weChatIndexStatus
+        }
+    }
+
     func setProviderRoute(_ role: AIProviderRouteRole, providerID: String?) async {
         guard let repository else { return }
         let key = role == .fast ? Self.fastProviderRouteKey : Self.reasoningProviderRouteKey
@@ -981,6 +1043,46 @@ final class AppModel: ObservableObject {
         return String.localizedStringWithFormat(String(localized: "Added %lld starter Sources; %lld need attention."), added, failed)
     }
 
+    func searchSources(_ query: String) async -> String {
+        guard let discoveryService else { return String(localized: "Source discovery is not ready.") }
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return String(localized: "Enter an Official Account name.") }
+        sourceDiscoveryInProgress = true
+        defer { sourceDiscoveryInProgress = false }
+        do {
+            let results = try await discoveryService.search(normalized, context: ConnectorContext(allowsUserInteraction: true))
+            try Task.checkCancellation()
+            sourceSearchResults = results
+            sourcePreview = nil
+            return results.isEmpty ? String(localized: "No matching Official Accounts found.") : String.localizedStringWithFormat(String(localized: "%lld Official Accounts found."), results.count)
+        } catch is CancellationError {
+            return ""
+        } catch ConnectorError.configurationRequired {
+            sourceSearchResults = []
+            weChatIndexConfigured = false
+            weChatIndexStatus = String(localized: "Configuration required")
+            return String(localized: "Configure the WeChat Index API key in Settings.")
+        } catch ConnectorError.quotaExhausted {
+            sourceSearchResults = []
+            weChatIndexConfigured = true
+            weChatIndexStatus = String(localized: "Provider balance exhausted")
+            return weChatIndexStatus
+        } catch ConnectorError.rateLimited {
+            sourceSearchResults = []
+            weChatIndexStatus = String(localized: "Rate limited")
+            return String(localized: "The WeChat Index is rate limited. Try again later.")
+        } catch {
+            sourceSearchResults = []
+            startupError = error.localizedDescription
+            return error.localizedDescription
+        }
+    }
+
+    func selectSourceSearchResult(_ preview: SourceDiscoveryPreview) {
+        sourcePreview = preview
+        sourceSearchResults = []
+    }
+
     func previewSource(_ input: String) async -> String {
         guard let url = URL(string: input), let discoveryService else { return String(localized: "Enter a valid Source URL.") }
         sourceDiscoveryInProgress = true
@@ -1016,7 +1118,7 @@ final class AppModel: ObservableObject {
             let committed = try await discoveryService.commit(preview, action: selectedAction)
             sourcePreview = nil
             pendingPlatformCapture = nil
-            if let platform = Self.authenticatedPlatform(for: preview.inputURL) { pendingBrowserAccounts[platform] = nil }
+            if let inputURL = preview.inputURL, let platform = Self.authenticatedPlatform(for: inputURL) { pendingBrowserAccounts[platform] = nil }
             try await reloadCanonicalLibrary()
             if selectedAction != .importOnce, let endpoint = committed.endpointIDs.first { try await foregroundRefresh(endpointID: endpoint) }
             return selectedAction == .importOnce ? String(localized: "Page imported.") : String(localized: "Source added and refreshed.")
@@ -1025,6 +1127,7 @@ final class AppModel: ObservableObject {
 
     func clearSourcePreview() {
         sourcePreview = nil
+        sourceSearchResults = []
         pendingPlatformCapture = nil
     }
 
@@ -1197,6 +1300,14 @@ final class AppModel: ObservableObject {
     private static let fastProviderRouteKey = "ai.route.fast.v1"
     private static let reasoningProviderRouteKey = "ai.route.reasoning.v1"
     static let rawRetentionPolicyKey = "retention.raw-policy.v1"
+    private static let weChatAPIKeyAccount = "wechat-index.jizhila.api-key"
+    private static let weChatVerifyCodeAccount = "wechat-index.jizhila.verify-code"
+
+    private static func sharedKeychainAccessGroup(teamID: String) -> String? {
+        let value = teamID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value != "TEAMID_REQUIRED" else { return nil }
+        return "\(value).com.chonghanqin.crosscurrent.shared"
+    }
 
     private static func requiresReasoning(_ task: AITask) -> Bool {
         switch task {
@@ -1207,7 +1318,6 @@ final class AppModel: ObservableObject {
 
     private static func authenticatedPlatform(for url: URL) -> AuthenticatedCreatorPlatform? {
         let host = url.host?.lowercased() ?? ""
-        if host == "mp.weixin.qq.com" || host.hasSuffix(".weixin.qq.com") { return .weChatOfficialAccount }
         if host == "xiaohongshu.com" || host.hasSuffix(".xiaohongshu.com") || host == "xhslink.com" { return .xiaohongshu }
         if host == "x.com" || host.hasSuffix("twitter.com") { return .x }
         if host == "weibo.com" || host.hasSuffix(".weibo.com") { return .weibo }
@@ -1217,7 +1327,6 @@ final class AppModel: ObservableObject {
 
     private static func authenticatedPlatform(for connector: ConnectorKind) -> AuthenticatedCreatorPlatform? {
         switch connector {
-        case .weChatOfficialAccount: .weChatOfficialAccount
         case .xiaohongshu: .xiaohongshu
         case .x: .x
         case .weibo: .weibo
@@ -1258,7 +1367,7 @@ final class AppModel: ObservableObject {
         }
         let fixtures = [
             SourceFixture(id: UUID(uuidString: "20000000-0000-0000-0000-000000000001")!, revisionID: UUID(uuidString: "21000000-0000-0000-0000-000000000001")!, endpointID: UUID(uuidString: "22000000-0000-0000-0000-000000000001")!, name: "Model Lab", kind: .publication, connector: .rss, access: .anonymous, privacy: .public, coverage: .globalFocused, health: .healthy, url: "https://example.com/model-lab.xml"),
-            SourceFixture(id: UUID(uuidString: "20000000-0000-0000-0000-000000000002")!, revisionID: UUID(uuidString: "21000000-0000-0000-0000-000000000002")!, endpointID: UUID(uuidString: "22000000-0000-0000-0000-000000000002")!, name: "城市观察 City Brief", kind: .publication, connector: .weChatOfficialAccount, access: .authenticated, privacy: .public, coverage: .chinaFocused, health: .authenticationRequired, url: "https://mp.weixin.qq.com/s/example"),
+            SourceFixture(id: UUID(uuidString: "20000000-0000-0000-0000-000000000002")!, revisionID: UUID(uuidString: "21000000-0000-0000-0000-000000000002")!, endpointID: UUID(uuidString: "22000000-0000-0000-0000-000000000002")!, name: "城市观察 City Brief", kind: .publication, connector: .weChatOfficialAccount, access: .anonymous, privacy: .public, coverage: .chinaFocused, health: .healthy, url: "https://mp.weixin.qq.com/mp/profile_ext?__biz=Zml4dHVyZQ=="),
             SourceFixture(id: UUID(uuidString: "20000000-0000-0000-0000-000000000003")!, revisionID: UUID(uuidString: "21000000-0000-0000-0000-000000000003")!, endpointID: UUID(uuidString: "22000000-0000-0000-0000-000000000003")!, name: "Mira Chen / 陈米拉", kind: .person, connector: .xiaohongshu, access: .authenticated, privacy: .public, coverage: .mixed, health: .platformChanged, url: "https://www.xiaohongshu.com/user/profile/example"),
         ]
         for fixture in fixtures {

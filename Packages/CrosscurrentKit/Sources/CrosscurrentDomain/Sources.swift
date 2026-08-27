@@ -23,7 +23,7 @@ public enum CoverageEcosystem: String, Codable, CaseIterable, Sendable {
 
 public enum ConnectorHealth: String, Codable, CaseIterable, Sendable {
     case healthy, syncing, retrying, authenticationRequired, rateLimited, temporarilyUnavailable
-    case platformChanged, error, disabled
+    case platformChanged, configurationRequired, error, disabled
 }
 
 public enum SourceEndpointRelationship: String, Codable, CaseIterable, Sendable {

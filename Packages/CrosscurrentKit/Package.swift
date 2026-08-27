@@ -61,7 +61,10 @@ let package = Package(
             .product(name: "SwiftSoup", package: "SwiftSoup"),
             .product(name: "Readability", package: "swift-readability"),
         ]),
-        .target(name: "CrosscurrentIngestion", dependencies: ["CrosscurrentDomain", "CrosscurrentStorage", "CrosscurrentConnectors", "CrosscurrentBrowser"]),
+        .target(name: "CrosscurrentIngestion", dependencies: [
+            "CrosscurrentDomain", "CrosscurrentStorage", "CrosscurrentConnectors", "CrosscurrentBrowser",
+            .product(name: "SwiftSoup", package: "SwiftSoup"),
+        ]),
         .target(name: "CrosscurrentIntelligence", dependencies: ["CrosscurrentDomain", "CrosscurrentStorage"]),
         .target(name: "CrosscurrentSearch", dependencies: [
             "CrosscurrentDomain", "CrosscurrentStorage",
