@@ -1,13 +1,13 @@
 import Foundation
 import CrosscurrentDomain
 import CrosscurrentConnectors
-import CrosscurrentStorage
+@testable import CrosscurrentStorage
 import CrosscurrentIngestion
 import GRDB
 import Testing
 
 @Test func redactionHappensBeforePersistenceBoundary() throws {
-    let input = try #require(URL(string: "https://example.com/news?token=secret&q=safe#private"))
+    let input = try #require(URL(string: "https://example.com/news?token=secret&key=commercial-key&verifycode=provider-code&q=safe#private"))
     let result = HTTPMetadataRedactor.redact(
         url: input,
         headers: ["Authorization": "Bearer secret", "Accept": "text/html", "Set-Cookie": "session=x"]
@@ -16,7 +16,107 @@ import Testing
     #expect(result.headers["Set-Cookie"] == "<redacted>")
     #expect(result.headers["Accept"] == "text/html")
     #expect(result.safeURL.absoluteString.contains("secret") == false)
+    #expect(result.safeURL.absoluteString.contains("commercial-key") == false)
+    #expect(result.safeURL.absoluteString.contains("provider-code") == false)
     #expect(result.safeURL.fragment == nil)
+}
+
+@Test func weChatStableExternalIdentityMakesRepeatedRefreshIdempotent() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentWeChatDedupeTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try CrosscurrentDatabase.open(at: DatabaseLocations(container: root), role: .mainApp)
+    let repository = CrosscurrentRepository(database: database, writerInstance: "wechat-dedupe")
+    let sourceRevision = SourceRevision(sourceID: SourceID(), displayName: "机器之心")
+    let source = LogicalSource(id: sourceRevision.sourceID, currentRevisionID: sourceRevision.id, kind: .organization)
+    let endpoint = SourceEndpoint(
+        sourceID: source.id,
+        connector: .weChatOfficialAccount,
+        externalID: "wechat-account:gh_fixture",
+        accessRequirement: .anonymous,
+        contentPrivacy: .public
+    )
+    _ = try await repository.saveSource(source, revision: sourceRevision, endpoints: [endpoint])
+    let pipeline = IngestionPipeline(repository: repository)
+    let stableID = "wechat-article:gh_fixture:100:1"
+    let first = ConnectorItemCandidate(
+        externalID: stableID,
+        canonicalURL: URL(string: "https://mp.weixin.qq.com/s?__biz=QQ==&mid=100&idx=1&sn=abc&scene=126"),
+        title: "稳定文章",
+        publishedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        contentText: "相同的规范化文章内容用于验证重复刷新不会创建第二个 Item。",
+        acquisitionProvenance: .officialHTTP
+    )
+    var second = first
+    second.canonicalURL = URL(string: "https://mp.weixin.qq.com/s/short-link")
+    let firstResult = try await pipeline.ingest(candidate: first, sourceID: source.id, endpointID: endpoint.id)
+    let secondResult = try await pipeline.ingest(candidate: second, sourceID: source.id, endpointID: endpoint.id)
+    #expect(firstResult.item.id == secondResult.item.id)
+    #expect(firstResult.createdRevision)
+    #expect(secondResult.createdRevision == false)
+    #expect(try await repository.sourceEndpointHealth().first(where: { $0.endpointID == endpoint.id })?.itemCount == 1)
+}
+
+@Test func legacyAuthenticatedWeChatEndpointMigratesWithoutLosingSourceHistory() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentWeChatMigrationTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try CrosscurrentDatabase.open(at: DatabaseLocations(container: root), role: .mainApp)
+    let repository = CrosscurrentRepository(database: database, writerInstance: "wechat-migration")
+    let sourceRevision = SourceRevision(sourceID: SourceID(), displayName: "Legacy Official Account")
+    let source = LogicalSource(id: sourceRevision.sourceID, currentRevisionID: sourceRevision.id, kind: .organization)
+    let accountID = ConnectorAccountID()
+    let endpoint = SourceEndpoint(
+        sourceID: source.id,
+        connector: .weChatOfficialAccount,
+        accountID: accountID,
+        externalID: "https://mp.weixin.qq.com/s?__biz=QQ==&mid=100&idx=1&sn=legacy",
+        canonicalURL: URL(string: "https://mp.weixin.qq.com/s?__biz=QQ==&mid=100&idx=1&sn=legacy"),
+        accessRequirement: .authenticated,
+        contentPrivacy: .private,
+        health: .authenticationRequired,
+        lastSuccessfulSync: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let oldClassification = SourceAIClassification(
+        sourceID: source.id,
+        accessRequirement: .authenticated,
+        contentPrivacy: .private,
+        provenance: .connector,
+        confidence: .certain
+    )
+    _ = try await repository.saveConnectorAccount(
+        id: accountID,
+        kind: .weChatOfficialAccount,
+        externalIdentity: "legacy-wechat-login",
+        browserProfileID: UUID()
+    )
+    _ = try await repository.saveSource(source, revision: sourceRevision, endpoints: [endpoint], aiClassification: oldClassification)
+    _ = try await repository.finishSync(
+        endpointID: endpoint.id,
+        cursor: StoredSyncCursor(family: "browser-capture", data: Data("legacy".utf8)),
+        itemCount: 0,
+        startedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+
+    let migrationTime = Date(timeIntervalSince1970: 1_800_000_000)
+    try await database.pool.write { db in
+        try CanonicalSchema.migrateWeChatEndpointSemantics(db, now: migrationTime)
+    }
+
+    let snapshot = try #require(try await repository.sourceSnapshots().first(where: { $0.source.id == source.id }))
+    let migrated = try #require(snapshot.endpoints.first(where: { $0.id == endpoint.id }))
+    #expect(migrated.accountID == nil)
+    #expect(migrated.accessRequirement == .anonymous)
+    #expect(migrated.contentPrivacy == .public)
+    #expect(migrated.health == .healthy)
+    #expect(migrated.lastSuccessfulSync == nil)
+    #expect(snapshot.aiClassification?.accessRequirement == .anonymous)
+    #expect(snapshot.aiClassification?.contentPrivacy == .public)
+    let cursor = try await repository.syncCursor(endpointID: endpoint.id)
+    #expect(cursor == nil)
+    let classifications = try await database.pool.read { db in
+        try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM source_ai_classifications WHERE source_id=?", arguments: [source.id.description]) ?? 0
+    }
+    #expect(classifications == 2)
+    #expect(snapshot.source.currentRevisionID == source.currentRevisionID)
 }
 
 @Test func mainAppMigratesAndAgentSharesCanonicalWrites() async throws {
@@ -46,6 +146,36 @@ import Testing
     let observedByMain = try await main.generations()
     #expect(observedByMain[.endpoints]?.generation == 2)
     #expect(observedByMain[.endpoints]?.writerInstance == "agent-test")
+}
+
+@Test func aTTLNoOpDoesNotAdvanceTheLastRemoteSuccess() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentRefreshNoOpTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try CrosscurrentDatabase.open(at: DatabaseLocations(container: root), role: .mainApp)
+    let repository = CrosscurrentRepository(database: database, writerInstance: "refresh-no-op")
+    let revision = SourceRevision(sourceID: SourceID(), displayName: "Cost-guarded Source")
+    let source = LogicalSource(id: revision.sourceID, currentRevisionID: revision.id, kind: .organization)
+    let previousSuccess = Date(timeIntervalSince1970: 1_700_000_000)
+    let endpoint = SourceEndpoint(
+        sourceID: source.id,
+        connector: .weChatOfficialAccount,
+        externalID: "wechat-account:gh_fixture",
+        accessRequirement: .anonymous,
+        contentPrivacy: .public,
+        lastSuccessfulSync: previousSuccess
+    )
+    _ = try await repository.saveSource(source, revision: revision, endpoints: [endpoint])
+    _ = try await repository.finishSync(
+        endpointID: endpoint.id,
+        cursor: nil,
+        itemCount: 0,
+        recordsSuccessfulRefresh: false,
+        startedAt: previousSuccess.addingTimeInterval(60),
+        completedAt: previousSuccess.addingTimeInterval(120)
+    )
+    let stored = try #require(try await repository.sourceEndpoint(id: endpoint.id))
+    #expect(stored.lastSuccessfulSync == previousSuccess)
+    #expect(stored.health == .healthy)
 }
 
 @Test func durableLeaseExpiresAndCanBeTakenOver() async throws {
