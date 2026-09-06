@@ -231,6 +231,7 @@ private actor WeChatUnionOfficialHTTP: WeChatOfficialArticleLoading {
         try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='canonical-v9-wechat-article-aliases'")
         try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='canonical-v10-wechat-backfill'")
         try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='canonical-v8-wechat-acquisition'")
+        try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier='canonical-v11-item-content-reversions'")
         try db.execute(sql: "PRAGMA user_version=7")
     }
     #expect(throws: (any Error).self) { try CrosscurrentDatabase.open(at: locations, role: .agent) }
@@ -356,15 +357,18 @@ private struct WeChatResolvingOfficialHTTP: WeChatOfficialArticleLoading {
     let repository = CrosscurrentRepository(database: database)
     let job = DurableJob(kind: "refresh", inputHash: "slow-wechat-source", idempotencyKey: "slow-wechat-source")
     _ = try await repository.enqueue(job)
-    let (_, lease) = try #require(try await repository.leaseJob(id: job.id, owner: "foreground", duration: 0.05))
+    let (_, lease) = try #require(try await repository.leaseJob(id: job.id, owner: "foreground", duration: 60))
+    let (started, signal) = AsyncStream<Void>.makeStream()
     let operation = Task {
         try await WeChatJobLeaseGuard.run(repository: repository, lease: lease, renewalInterval: .milliseconds(10)) {
+            signal.yield(())
+            signal.finish()
             try await Task.sleep(for: .seconds(3))
             return true
         }
     }
-    try await Task.sleep(for: .milliseconds(80))
-    #expect(try await repository.leaseNextJob(owner: "agent", eligibleKinds: ["refresh"]) == nil)
+    for await _ in started { break }
+    #expect(try await repository.leaseNextJob(owner: "agent", eligibleKinds: ["refresh"], now: lease.expiresAt.addingTimeInterval(1)) == nil)
     try await database.pool.write { db in
         try db.execute(sql: "UPDATE jobs SET cancellation_requested=1 WHERE id=?", arguments: [job.id.description])
     }

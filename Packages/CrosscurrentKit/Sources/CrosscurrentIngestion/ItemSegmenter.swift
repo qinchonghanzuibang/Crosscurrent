@@ -7,14 +7,14 @@ public enum ItemSegmenter {
         let paragraphs = paragraphRanges(in: revision.text)
         let generated: [ItemSegment]
         if paragraphs.count <= 1 {
-            generated = [segment(text: revision.text, byteOffset: 0, revisionID: revision.id, kind: .whole, headingPath: [])]
+            generated = [segment(text: revision.text, byteOffset: 0, revision: revision, kind: .whole, headingPath: [])]
         } else {
             var headingPath: [String] = []
             generated = paragraphs.map { paragraph, offset in
                 let trimmed = paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
                 let looksLikeHeading = trimmed.count < 100 && (trimmed.hasPrefix("#") || !trimmed.contains("。") && !trimmed.contains(".") && !trimmed.contains("，"))
                 if looksLikeHeading { headingPath = [trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "# "))] }
-                return segment(text: trimmed, byteOffset: offset, revisionID: revision.id, kind: looksLikeHeading ? .section : .paragraph, headingPath: headingPath)
+                return segment(text: trimmed, byteOffset: offset, revision: revision, kind: looksLikeHeading ? .section : .paragraph, headingPath: headingPath)
             }
         }
         return align(generated, with: previous)
@@ -34,11 +34,11 @@ public enum ItemSegmenter {
         return output
     }
 
-    private static func segment(text: String, byteOffset: Int, revisionID: ItemRevisionID, kind: SegmentKind, headingPath: [String]) -> ItemSegment {
+    private static func segment(text: String, byteOffset: Int, revision: ItemRevision, kind: SegmentKind, headingPath: [String]) -> ItemSegment {
         let hash = digest(Data(text.utf8))
         return ItemSegment(
-            lineageID: SegmentLineageID(stableUUID(hash: hash, salt: headingPath.joined(separator: "/"))),
-            itemRevisionID: revisionID,
+            lineageID: SegmentLineageID(stableUUID(hash: hash, salt: "\(revision.itemID):\(byteOffset):" + headingPath.joined(separator: "/"))),
+            itemRevisionID: revision.id,
             kind: kind,
             headingPath: headingPath,
             span: TextSpan(utf8Start: byteOffset, utf8Length: text.utf8.count, excerptHash: hash),
@@ -54,7 +54,7 @@ public enum ItemSegmenter {
 
         // Exact surviving spans keep their lineage regardless of movement.
         for index in output.indices {
-            if let match = available.first(where: { previous[$0].contentHash == output[index].contentHash }) {
+            if let match = available.sorted().first(where: { previous[$0].contentHash == output[index].contentHash }) {
                 output[index].lineageID = previous[match].lineageID
                 available.remove(match)
             }

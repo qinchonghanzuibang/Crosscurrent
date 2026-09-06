@@ -156,7 +156,8 @@ public actor WeChatArticleFetcher {
         self.provider = provider
     }
 
-    public func enrich(_ candidate: ConnectorItemCandidate) async -> ConnectorItemCandidate {
+    public func enrich(_ candidate: ConnectorItemCandidate) async throws -> ConnectorItemCandidate {
+        try Task.checkCancellation()
         guard let url = candidate.canonicalURL else { return candidate }
         var definitiveUnavailable = false
         do {
@@ -172,6 +173,8 @@ public actor WeChatArticleFetcher {
                 break
             }
         } catch {
+            try Task.checkCancellation()
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
             // Public HTTP failure falls through to the provider; it never requests browser authentication.
         }
 
@@ -198,6 +201,8 @@ public actor WeChatArticleFetcher {
         } catch ConnectorError.articleUnavailable(definitive: true) {
             definitiveUnavailable = true
         } catch {
+            try Task.checkCancellation()
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
             // Metadata remains valid evidence when both content routes are temporarily unavailable.
         }
 
@@ -310,7 +315,7 @@ public actor WeChatConnector: QueryDiscoveringConnector {
     }
 
     public func fetchContent(candidate: ConnectorItemCandidate, context _: ConnectorContext) async throws -> ConnectorItemCandidate {
-        await articleFetcher.enrich(candidate)
+        try await articleFetcher.enrich(candidate)
     }
 
     public func healthCheck(accountID _: ConnectorAccountID?) async -> ConnectorHealth {

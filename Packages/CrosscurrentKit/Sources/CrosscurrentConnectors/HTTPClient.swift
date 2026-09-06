@@ -22,12 +22,22 @@ public struct URLSessionConnectorHTTPClient: ConnectorHTTPClient {
     private static let hostGate = HostRequestGate()
     private let session: URLSession
 
-    public init(session: URLSession = .shared) { self.session = session }
+    public init(session: URLSession? = nil) {
+        if let session { self.session = session }
+        else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.httpShouldSetCookies = false
+            configuration.httpCookieStorage = nil
+            configuration.urlCredentialStorage = nil
+            self.session = URLSession(configuration: configuration)
+        }
+    }
 
     public func get(_ url: URL, headers: [String: String] = [:]) async throws -> ConnectorHTTPResponse {
         let host = url.host?.lowercased() ?? url.absoluteString
-        await Self.hostGate.acquire(host)
+        try await Self.hostGate.acquire(host)
         defer { Task { await Self.hostGate.release(host) } }
+        try Task.checkCancellation()
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 30
@@ -42,7 +52,7 @@ public struct URLSessionConnectorHTTPClient: ConnectorHTTPClient {
             let retry = Self.retryAfter(http.value(forHTTPHeaderField: "Retry-After"))
             throw ConnectorError.rateLimited(retryAfter: retry)
         }
-        if [502, 503, 504].contains(http.statusCode) {
+        if (500...599).contains(http.statusCode) {
             throw ConnectorError.transientHTTP(statusCode: http.statusCode, retryAfter: Self.retryAfter(http.value(forHTTPHeaderField: "Retry-After")))
         }
         guard (200..<300).contains(http.statusCode) || http.statusCode == 304 else {
@@ -68,20 +78,40 @@ public struct URLSessionConnectorHTTPClient: ConnectorHTTPClient {
     }
 }
 
-private actor HostRequestGate {
+actor HostRequestGate {
+    private struct Waiter {
+        var id: UUID
+        var continuation: CheckedContinuation<Void, Error>
+    }
     private var occupied: Set<String> = []
-    private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    private var waiters: [String: [Waiter]] = [:]
 
-    func acquire(_ host: String) async {
+    func acquire(_ host: String) async throws {
+        try Task.checkCancellation()
         if occupied.insert(host).inserted { return }
-        await withCheckedContinuation { waiters[host, default: []].append($0) }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+                else { waiters[host, default: []].append(Waiter(id: id, continuation: continuation)) }
+            }
+        } onCancel: {
+            Task { await self.cancel(id: id, host: host) }
+        }
+    }
+
+    private func cancel(id: UUID, host: String) {
+        guard let index = waiters[host]?.firstIndex(where: { $0.id == id }),
+              let waiter = waiters[host]?.remove(at: index) else { return }
+        if waiters[host]?.isEmpty == true { waiters[host] = nil }
+        waiter.continuation.resume(throwing: CancellationError())
     }
 
     func release(_ host: String) {
         if var queue = waiters[host], !queue.isEmpty {
             let next = queue.removeFirst()
             waiters[host] = queue.isEmpty ? nil : queue
-            next.resume()
+            next.continuation.resume()
         } else {
             occupied.remove(host)
         }

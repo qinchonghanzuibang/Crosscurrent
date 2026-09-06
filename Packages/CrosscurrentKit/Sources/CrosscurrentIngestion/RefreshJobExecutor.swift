@@ -30,8 +30,8 @@ public struct RefreshJobPayload: Codable, Hashable, Sendable {
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         endpointID = try values.decode(SourceEndpointID.self, forKey: .endpointID)
-        maximumPages = try values.decodeIfPresent(Int.self, forKey: .maximumPages) ?? 10
-        maximumItems = try values.decodeIfPresent(Int.self, forKey: .maximumItems)
+        maximumPages = max(1, min(try values.decodeIfPresent(Int.self, forKey: .maximumPages) ?? 10, 100))
+        maximumItems = try values.decodeIfPresent(Int.self, forKey: .maximumItems).map { max(1, min($0, 10_000)) }
         manual = try values.decodeIfPresent(Bool.self, forKey: .manual) ?? false
     }
 }
@@ -63,10 +63,13 @@ public enum JobExecutionError: LocalizedError {
 /// start. Keep its durable lease alive throughout those cancellable network calls.
 enum WeChatJobLeaseGuard {
     static func run<Value: Sendable>(repository: CrosscurrentRepository, lease: JobLease, renewalInterval: Duration = .seconds(30), operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
-        try await withThrowingTaskGroup(of: Value.self) { group in
+        try Task.checkCancellation()
+        if try await repository.cancellationRequested(for: lease) { throw JobExecutionError.cancelled }
+        let renewed = try await repository.renewLease(lease, duration: 300)
+        return try await withThrowingTaskGroup(of: Value.self) { group in
             group.addTask { try await operation() }
             group.addTask {
-                var held = lease
+                var held = renewed
                 while true {
                     try await Task.sleep(for: renewalInterval)
                     if try await repository.cancellationRequested(for: held) { throw JobExecutionError.cancelled }
@@ -104,25 +107,39 @@ public actor RefreshJobExecutor {
             return try await refreshWeChat(weChat, endpoint: endpoint, payload: payload, lease: initialLease)
         }
 
+        let lease = try await repository.renewLease(initialLease, duration: 300)
+        return try await WeChatJobLeaseGuard.run(repository: repository, lease: lease) {
+            try await self.refresh(connector, endpoint: endpoint, payload: payload, lease: lease)
+        }
+    }
+
+    private func refresh(_ connector: any Connector, endpoint: SourceEndpoint, payload: RefreshJobPayload, lease: JobLease) async throws -> RefreshJobCheckpoint {
         let startedAt = Date.now
         _ = try await repository.recordSyncStarted(endpointID: endpoint.id, at: startedAt)
-        var lease = initialLease
-        var cursor = try await repository.syncCursor(endpointID: endpoint.id).map { ConnectorCursor(family: $0.family, encodedValue: $0.data) }
+        // A pagination position in a changing newest-first listing is not an
+        // incremental watermark: every new refresh must visit its newest page.
+        var cursor = connector.cursorScope == .incremental
+            ? try await repository.syncCursor(endpointID: endpoint.id).map { ConnectorCursor(family: $0.family, encodedValue: $0.data) }
+            : nil
         var pages = 0
         var candidateCount = 0
         var revisionCount = 0
         var performedRemoteRequest = false
 
         while pages < payload.maximumPages {
+            try Task.checkCancellation()
             if try await repository.cancellationRequested(for: lease) { throw JobExecutionError.cancelled }
-            if lease.expiresAt.timeIntervalSinceNow < 30 { lease = try await repository.renewLease(lease, duration: 120) }
 
             let page = try await connector.refresh(endpoint: endpoint, cursor: cursor, context: ConnectorContext())
             performedRemoteRequest = performedRemoteRequest || page.performedRemoteRequest
-            let remaining = payload.maximumItems.map { max(0, $0 - candidateCount) } ?? page.candidates.count
-            for candidate in page.candidates.prefix(remaining) {
+            // Apply the item budget between complete pages. Advancing a feed
+            // fingerprint after ingesting only its prefix would lose its tail.
+            for candidate in page.candidates {
+                try Task.checkCancellation()
+                if try await repository.cancellationRequested(for: lease) { throw JobExecutionError.cancelled }
                 let fetched = try await connector.fetchContent(candidate: candidate, context: ConnectorContext())
                 let complete = try await articleEnricher.enrich(fetched, connector: endpoint.connector)
+                try Task.checkCancellation()
                 let result = try await ingestion.ingest(candidate: complete, sourceID: endpoint.sourceID, endpointID: endpoint.id)
                 candidateCount += 1
                 if result.createdRevision { revisionCount += 1 }
@@ -133,7 +150,9 @@ public actor RefreshJobExecutor {
             if page.reachedEnd || page.nextCursor == nil || payload.maximumItems.map({ candidateCount >= $0 }) == true { break }
         }
 
-        let stored = cursor.map { StoredSyncCursor(family: $0.family, data: $0.value) }
+        try Task.checkCancellation()
+        if try await repository.cancellationRequested(for: lease) { throw JobExecutionError.cancelled }
+        let stored = connector.cursorScope == .incremental ? cursor.map { StoredSyncCursor(family: $0.family, data: $0.value) } : nil
         _ = try await repository.finishSync(
             endpointID: endpoint.id,
             cursor: stored,

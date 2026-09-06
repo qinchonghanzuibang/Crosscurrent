@@ -41,9 +41,18 @@ public actor IngestionPipeline {
         if let weChatState { existing = weChatState.item }
         else { existing = try await repository.itemState(endpointID: endpointID, externalID: candidate.externalID) }
         let itemID = existing?.itemID ?? ItemID()
-        let normalizedText = normalizeText(candidate.contentText ?? candidate.summary ?? candidate.title)
-        let hashInput = [candidate.title, candidate.author ?? "", normalizedText].joined(separator: "\n")
-        let contentHash = SHA256.hash(data: Data(hashInput.utf8)).map { String(format: "%02x", $0) }.joined()
+        let extracted = try candidate.contentHTML.map {
+            try StaticHTMLPreprocessor.conservativeSanitize($0, baseURL: candidate.canonicalURL)
+        }
+        let sanitizedHTML = extracted?.sanitizedHTML
+        let evidenceText = [candidate.contentText, extracted?.plainText, candidate.summary, candidate.title]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? candidate.title
+        let normalizedText = normalizeText(evidenceText)
+        // Reader structure is evidence too: image, link and table changes must
+        // produce an immutable revision even when visible prose is unchanged.
+        let hashInput = try JSONEncoder().encode([candidate.title, candidate.author ?? "", normalizedText, sanitizedHTML ?? ""])
+        let contentHash = SHA256.hash(data: hashInput).map { String(format: "%02x", $0) }.joined()
         let revisionID = existing?.currentContentHash == contentHash ? existing!.currentRevisionID : ItemRevisionID()
         let item = Item(
             id: itemID,
@@ -58,12 +67,6 @@ public actor IngestionPipeline {
         var revision: ItemRevision?
         var createdRevision = false
         if existing?.currentContentHash != contentHash {
-            let sanitizedHTML: String?
-            if let contentHTML = candidate.contentHTML {
-                sanitizedHTML = try StaticHTMLPreprocessor.conservativeSanitize(contentHTML, baseURL: candidate.canonicalURL).sanitizedHTML
-            } else {
-                sanitizedHTML = nil
-            }
             let htmlBlob: StoredBlob?
             if let sanitizedHTML, let blobStore {
                 htmlBlob = try await blobStore.put(Data(sanitizedHTML.utf8), mediaType: "text/html; charset=utf-8", retentionClass: .durableEvidence)
@@ -104,8 +107,8 @@ public actor IngestionPipeline {
                 weChatIdentity: weChatIdentity,
                 isInitialBackfill: candidate.isInitialBackfill == true,
                 idempotencyKey: isWeChat
-                    ? "item:\(itemID):\(contentHash)"
-                    : "item:\(endpointID):\(candidate.externalID):\(contentHash)"
+                    ? "item:\(itemID):after:\(existing?.currentRevisionID.description ?? "initial"):\(contentHash)"
+                    : "item:\(endpointID):\(candidate.externalID):after:\(existing?.currentRevisionID.description ?? "initial"):\(contentHash)"
             )
             if createdRevision {
                 try await enrichment.enrich(

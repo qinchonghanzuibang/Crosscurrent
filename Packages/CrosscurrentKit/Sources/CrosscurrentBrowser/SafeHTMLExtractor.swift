@@ -41,7 +41,7 @@ public enum StaticHTMLPreprocessor {
     public static func conservativeSanitize(_ html: String, baseURL: URL? = nil) throws -> SafeExtractionResult {
         let document = try SwiftSoup.parseBodyFragment(html, baseURL?.absoluteString ?? "")
         try document.select("script, style, iframe, frame, object, embed, form, input, button, textarea, select, meta, link, foreignObject, animate, animateMotion, animateTransform, set, use").remove()
-        let htmlTags = Set(["p", "div", "article", "section", "main", "header", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "code", "em", "strong", "b", "i", "u", "s", "br", "hr", "a", "img", "figure", "figcaption", "table", "thead", "tbody", "tr", "th", "td", "span", "sup", "sub"])
+        let htmlTags = Set(["p", "div", "article", "section", "main", "header", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "dl", "dt", "dd", "blockquote", "pre", "code", "em", "strong", "b", "i", "u", "s", "br", "hr", "a", "img", "figure", "figcaption", "table", "caption", "colgroup", "col", "thead", "tbody", "tfoot", "tr", "th", "td", "span", "sup", "sub"])
         let svgTags = Set(["svg", "g", "path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "text", "tspan", "title", "desc"])
         let mathMLTags = Set(["math", "mrow", "mi", "mn", "mo", "ms", "mtext", "mfrac", "msqrt", "mroot", "msup", "msub", "msubsup", "munder", "mover", "munderover", "mtable", "mtr", "mtd", "mstyle", "mpadded", "mspace", "mphantom", "mfenced", "menclose", "mmultiscripts", "mprescripts", "none", "semantics", "annotation"])
         let allowed = htmlTags.union(svgTags).union(mathMLTags)
@@ -56,18 +56,17 @@ public enum StaticHTMLPreprocessor {
                 try element.attr("href", resolved)
             }
             if name == "img" {
-                let candidate = firstNonemptyAttribute(
-                    in: element,
-                    names: ["data-src", "data-original", "data-lazy-src", "data-actualsrc", "src"]
-                ) ?? bestSourceSetCandidate(firstNonemptyAttribute(in: element, names: ["data-srcset", "srcset"]))
-                if let candidate, let resolved = resolvedURLString(candidate, baseURL: baseURL), isSafeReaderAsset(resolved) {
+                let candidates = ["data-src", "data-original", "data-lazy-src", "data-actualsrc"]
+                    .compactMap { firstNonemptyAttribute(in: element, names: [$0]) }
+                    + [bestSourceSetCandidate(firstNonemptyAttribute(in: element, names: ["data-srcset", "srcset"])), firstNonemptyAttribute(in: element, names: ["src"])].compactMap { $0 }
+                if let resolved = candidates.compactMap({ resolvedURLString($0, baseURL: baseURL) }).first(where: isSafeReaderAsset) {
                     try element.attr("src", resolved)
                 } else {
                     try element.removeAttr("src")
                 }
                 normalizeImageDimensions(element)
             }
-            let permittedAttributes: Set<String>
+            var permittedAttributes: Set<String>
             if name == "a" {
                 permittedAttributes = ["href", "title"]
             } else if name == "img" {
@@ -76,9 +75,20 @@ public enum StaticHTMLPreprocessor {
                 permittedAttributes = ["viewbox", "preserveaspectratio", "width", "height", "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry", "d", "points", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "opacity", "transform", "role", "aria-label"]
             } else if mathMLTags.contains(name) {
                 permittedAttributes = ["display", "mathvariant", "mathsize", "mathcolor", "columnalign", "rowalign", "encoding", "accent", "accentunder", "align", "columnspacing", "columnlines", "columnwidth", "rowspacing", "rowlines", "linethickness", "stretchy", "symmetric", "largeop", "movablelimits", "form", "fence", "separator", "lspace", "rspace", "maxsize", "minsize", "notation", "scriptsizemultiplier", "scriptminsize", "displaystyle", "scriptlevel", "width", "height", "depth", "voffset"]
+            } else if name == "td" || name == "th" {
+                permittedAttributes = ["colspan", "rowspan", "scope", "headers"]
+            } else if name == "col" || name == "colgroup" {
+                permittedAttributes = ["span"]
+            } else if name == "ol" {
+                permittedAttributes = ["start", "reversed", "type"]
+            } else if name == "li" {
+                permittedAttributes = ["value"]
             } else {
                 permittedAttributes = []
             }
+            // Fragment destinations, document language and direction are useful
+            // semantics; source classes, styles and event handlers remain removed.
+            permittedAttributes.formUnion(["id", "lang", "dir"])
             for attribute in element.getAttributes()?.asList() ?? [] where !permittedAttributes.contains(attribute.getKey().lowercased()) {
                 try element.removeAttr(attribute.getKey())
             }
@@ -111,18 +121,8 @@ public enum StaticHTMLPreprocessor {
     private static func isSafeReaderAsset(_ value: String) -> Bool {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalized.hasPrefix("data:image/") || normalized.hasPrefix("blob:") || normalized.hasPrefix("app-asset:") { return true }
-        guard let components = URLComponents(string: value), components.scheme?.lowercased() == "https",
-              components.user == nil, components.password == nil,
-              let host = components.host?.lowercased(), !host.isEmpty,
-              host != "localhost", !host.hasSuffix(".localhost"), !host.hasSuffix(".local")
-        else { return false }
-        let octets = host.split(separator: ".").compactMap { UInt8($0) }
-        if octets.count == 4 {
-            if octets[0] == 10 || octets[0] == 127 || (octets[0] == 169 && octets[1] == 254) { return false }
-            if octets[0] == 172 && (16...31).contains(octets[1]) { return false }
-            if octets[0] == 192 && octets[1] == 168 { return false }
-        }
-        return true
+        guard let url = URL(string: value) else { return false }
+        return ReaderRemoteURLPolicy.allows(url, requiresHTTPS: true)
     }
 
     private static func firstNonemptyAttribute(in element: Element, names: [String]) -> String? {
@@ -147,7 +147,11 @@ public enum StaticHTMLPreprocessor {
 
     private static func resolvedURLString(_ value: String, baseURL: URL?) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.hasPrefix("//") else { return nil }
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("//") {
+            guard let scheme = baseURL?.scheme?.lowercased(), ["http", "https"].contains(scheme) else { return nil }
+            return URL(string: scheme + ":" + trimmed)?.absoluteString
+        }
         if trimmed.hasPrefix("#") {
             return baseURL.flatMap { URL(string: trimmed, relativeTo: $0)?.absoluteURL.absoluteString } ?? trimmed
         }

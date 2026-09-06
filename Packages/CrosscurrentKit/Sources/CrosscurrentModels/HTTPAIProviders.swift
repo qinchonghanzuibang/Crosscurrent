@@ -21,9 +21,10 @@ public struct OpenAIResponsesProvider: AIProvider {
         try AIEndpointSecurity.validate(endpoint)
         struct Body: Encodable { var model: String; var instructions: String; var input: String; var temperature: Double? }
         struct Response: Decodable {
-            struct Output: Decodable { struct Content: Decodable { var type: String; var text: String? }; var content: [Content] }
+            struct Output: Decodable { struct Content: Decodable { var type: String; var text: String? }; var type: String; var content: [Content]? }
             struct Usage: Decodable { var input_tokens: Int?; var output_tokens: Int? }
             var id: String?
+            var status: String?
             var output: [Output]
             var usage: Usage?
         }
@@ -33,11 +34,12 @@ public struct OpenAIResponsesProvider: AIProvider {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         urlRequest.httpBody = try JSONEncoder().encode(Body(model: request.model, instructions: request.instructions, input: request.input, temperature: request.temperature))
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await AIHTTPTransport.data(for: urlRequest, session: session)
         guard let http = response as? HTTPURLResponse else { throw AIProviderError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw AIProviderError.httpStatus(http.statusCode) }
         let decoded = try JSONDecoder().decode(Response.self, from: data)
-        let text = decoded.output.flatMap(\.content).filter { $0.type == "output_text" }.compactMap(\.text).joined()
+        guard decoded.status == nil || decoded.status == "completed" else { throw AIProviderError.invalidResponse }
+        let text = decoded.output.filter { $0.type == "message" }.flatMap { $0.content ?? [] }.filter { $0.type == "output_text" }.compactMap(\.text).joined()
         guard !text.isEmpty else { throw AIProviderError.invalidResponse }
         return AIResponse(text: text, providerRequestID: decoded.id, inputTokens: decoded.usage?.input_tokens, outputTokens: decoded.usage?.output_tokens)
     }
@@ -57,7 +59,7 @@ public struct OllamaProvider: AIProvider {
         self.endpoint = endpoint
         self.bearerToken = bearerToken
         self.session = session
-        let local = endpoint.host == "127.0.0.1" || endpoint.host == "localhost"
+        let local = AIEndpointSecurity.isLoopback(endpoint)
         self.executionLocation = local ? .local : .cloud
         self.capabilities = local ? [.structuredOutput, .reasoning, .local] : [.structuredOutput, .reasoning]
     }
@@ -77,7 +79,7 @@ public struct OllamaProvider: AIProvider {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let bearerToken { urlRequest.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization") }
         urlRequest.httpBody = try JSONEncoder().encode(Body(model: request.model, messages: [.init(role: "system", content: request.instructions), .init(role: "user", content: request.input)], stream: false))
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await AIHTTPTransport.data(for: urlRequest, session: session)
         guard let http = response as? HTTPURLResponse else { throw AIProviderError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw AIProviderError.httpStatus(http.statusCode) }
         let decoded = try JSONDecoder().decode(Response.self, from: data)
@@ -102,7 +104,7 @@ public struct OpenAICompatibleChatProvider: AIProvider {
         self.endpoint = endpoint
         self.additionalHeaders = additionalHeaders
         self.session = session
-        let local = Self.isLoopback(endpoint)
+        let local = AIEndpointSecurity.isLoopback(endpoint)
         executionLocation = local ? .local : .cloud
         capabilities = local ? [.structuredOutput, .reasoning, .local] : [.structuredOutput, .reasoning]
     }
@@ -129,7 +131,7 @@ public struct OpenAICompatibleChatProvider: AIProvider {
             messages: [.init(role: "system", content: request.instructions), .init(role: "user", content: request.input)],
             temperature: request.temperature
         ))
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await AIHTTPTransport.data(for: urlRequest, session: session)
         guard let http = response as? HTTPURLResponse else { throw AIProviderError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw AIProviderError.httpStatus(http.statusCode) }
         let decoded = try JSONDecoder().decode(Response.self, from: data)
@@ -138,9 +140,6 @@ public struct OpenAICompatibleChatProvider: AIProvider {
         return AIResponse(text: text, providerRequestID: decoded.id, inputTokens: decoded.usage?.prompt_tokens, outputTokens: decoded.usage?.completion_tokens)
     }
 
-    private static func isLoopback(_ endpoint: URL) -> Bool {
-        ["localhost", "127.0.0.1", "::1"].contains(endpoint.host?.lowercased() ?? "")
-    }
 }
 
 public struct AnthropicMessagesProvider: AIProvider {
@@ -170,7 +169,7 @@ public struct AnthropicMessagesProvider: AIProvider {
         urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         urlRequest.httpBody = try JSONEncoder().encode(Body(model: request.model, max_tokens: 2048, system: request.instructions, messages: [.init(role: "user", content: request.input)], temperature: request.temperature))
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await AIHTTPTransport.data(for: urlRequest, session: session)
         guard let http = response as? HTTPURLResponse else { throw AIProviderError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw AIProviderError.httpStatus(http.statusCode) }
         let decoded = try JSONDecoder().decode(Response.self, from: data)
@@ -210,7 +209,7 @@ public struct GeminiGenerateContentProvider: AIProvider {
             system_instruction: Content(role: nil, parts: [Part(text: request.instructions)]),
             contents: [Content(role: "user", parts: [Part(text: request.input)])]
         ))
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await AIHTTPTransport.data(for: urlRequest, session: session)
         guard let http = response as? HTTPURLResponse else { throw AIProviderError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw AIProviderError.httpStatus(http.statusCode) }
         let decoded = try JSONDecoder().decode(Response.self, from: data)
@@ -232,4 +231,28 @@ public struct OpenRouterProvider: AIProvider {
     }
 
     public func perform(_ request: AIRequest) async throws -> AIResponse { try await base.perform(request) }
+}
+
+enum AIHTTPTransport {
+    static func data(for request: URLRequest, session: URLSession) async throws -> (Data, URLResponse) {
+        // Consent and credentials apply to the configured origin. Redirects must
+        // never turn an authorized local request into a request to a cloud host.
+        try await session.data(for: request, delegate: AIOriginRedirectDelegate())
+    }
+}
+
+final class AIOriginRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest) async -> URLRequest? {
+        guard let original = task.originalRequest?.url, let destination = request.url,
+              Self.allowsRedirect(from: original, to: destination) else { return nil }
+        return request
+    }
+
+    static func allowsRedirect(from original: URL, to destination: URL) -> Bool {
+        guard (try? AIEndpointSecurity.validate(destination)) != nil else { return false }
+        let defaultPort = original.scheme?.lowercased() == "https" ? 443 : 80
+        return original.scheme?.lowercased() == destination.scheme?.lowercased()
+            && original.host?.lowercased() == destination.host?.lowercased()
+            && (original.port ?? defaultPort) == (destination.port ?? defaultPort)
+    }
 }

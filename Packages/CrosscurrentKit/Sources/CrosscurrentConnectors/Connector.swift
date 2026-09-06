@@ -216,8 +216,16 @@ public protocol QueryDiscoveringConnector: Connector {
     func search(query: String, context: ConnectorContext) async throws -> [ConnectorDiscoveryResult]
 }
 
+public enum ConnectorCursorScope: Sendable {
+    /// A durable watermark or fingerprint used by the next refresh.
+    case incremental
+    /// A position in a changing newest-first listing, valid only within this refresh.
+    case refreshPagination
+}
+
 public protocol Connector: Sendable {
     var kind: ConnectorKind { get }
+    var cursorScope: ConnectorCursorScope { get }
     var capabilities: ConnectorCapabilities { get }
     func discover(input: ConnectorDiscoveryInput, context: ConnectorContext) async throws -> ConnectorDiscoveryResult
     func authenticate(accountID: ConnectorAccountID, context: ConnectorContext) async throws
@@ -225,6 +233,10 @@ public protocol Connector: Sendable {
     func fetchContent(candidate: ConnectorItemCandidate, context: ConnectorContext) async throws -> ConnectorItemCandidate
     func healthCheck(accountID: ConnectorAccountID?) async -> ConnectorHealth
     func disconnect(accountID: ConnectorAccountID) async throws
+}
+
+public extension Connector {
+    var cursorScope: ConnectorCursorScope { .incremental }
 }
 
 public actor ConnectorRegistry {

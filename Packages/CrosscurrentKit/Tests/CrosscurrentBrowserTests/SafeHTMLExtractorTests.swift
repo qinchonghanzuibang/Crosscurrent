@@ -10,6 +10,52 @@ import Testing
     #expect(LinkPreviewURLPolicy.allows(try #require(URL(string: "file:///etc/passwd"))) == false)
 }
 
+@Test(arguments: ["https://[::1]/", "https://[::ffff:127.0.0.1]/", "https://[fd00::1]/", "https://[fe80::1]/", "https://localhost./", "https://127.1/", "https://2130706433/", "https://0177.0.0.1/", "https://user:secret@example.com/"])
+func readerRejectsAlternateLocalHostSpellingsAndEmbeddedCredentials(value: String) throws {
+    let url = try #require(URL(string: value))
+    #expect(!LinkPreviewURLPolicy.allows(url))
+    let html = try StaticHTMLPreprocessor.conservativeSanitize("<img src='\(value)'>").sanitizedHTML
+    #expect(!html.contains("src="))
+}
+
+@Test func readerPreservesMergedTableCellsListNumbersAndProtocolRelativeMedia() throws {
+    let html = """
+    <article lang="zh-Hans"><h2 id="results">结果 Results</h2>
+    <table><caption>Measured accuracy</caption><thead><tr><th colspan="2" scope="colgroup">Models</th></tr></thead>
+    <tbody><tr><th rowspan="2" scope="row">A</th><td>91%</td></tr><tr><td>93%</td></tr></tbody>
+    <tfoot><tr><td colspan="2">Two trials</td></tr></tfoot></table>
+    <ol start="4"><li value="7">Seventh step<ol><li>Nested detail</li></ol></li></ol>
+    <dl><dt>Recall</dt><dd>检索覆盖率</dd></dl>
+    <img src="tiny.png" srcset="//cdn.example.com/small.png 1x, //cdn.example.com/large.png 2x" onerror="unsafe()">
+    </article>
+    """
+    let sanitized = try StaticHTMLPreprocessor.conservativeSanitize(html, baseURL: URL(string: "https://example.com/post")).sanitizedHTML
+    for retained in ["<caption>", "colspan=\"2\"", "rowspan=\"2\"", "scope=\"row\"", "<tfoot>", "start=\"4\"", "value=\"7\"", "<dl>", "id=\"results\"", "lang=\"zh-Hans\"", "src=\"https://cdn.example.com/large.png\""] {
+        #expect(sanitized.contains(retained))
+    }
+    #expect(!sanitized.contains("onerror"))
+    #expect(!sanitized.contains("srcset"))
+}
+
+@Test func readerLeavesMathDelimitersInsideNestedCodeUntouched() async {
+    let html = #"<pre><code><span>let cost = \"$x^2$\"</span></code></pre><p>Formula $x^2$.</p>"#
+    let rendered = await ReaderHTMLPreparer.prepare(html)
+    #expect(rendered.contains("$x^2$"))
+    #expect(rendered.components(separatedBy: "<math").count == 2)
+}
+
+@Test func readerInsightsKeepShortChineseBlocksTablesAndCodeWithoutDuplicatingNestedParagraphs() {
+    let extracted = ReaderTextExtractor.plainText(fromSanitizedHTML: """
+    <article><h2>方法</h2><blockquote><p>这是一条需要保留的关键结论。</p></blockquote>
+    <table><tr><th>模型</th><th>得分</th></tr><tr><td>A</td><td>95%</td></tr></table>
+    <pre><code>return evidence</code></pre></article>
+    """)
+    #expect(extracted.contains("方法"))
+    #expect(extracted.contains("95%"))
+    #expect(extracted.contains("return evidence"))
+    #expect(extracted.components(separatedBy: "这是一条需要保留的关键结论。").count == 2)
+}
+
 private func maliciousArticleFixture() -> String {
     let repeated = Array(repeating: "This is evidence-rich article text that should remain readable after extraction.", count: 12).joined(separator: " ")
     return """

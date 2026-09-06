@@ -55,24 +55,30 @@ public enum AIProviderError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .configurationRequired: "Configure an AI provider to use this action."
-        case .policyDenied: "The content privacy policy does not permit this provider request."
-        case .invalidResponse: "The AI provider returned an invalid response."
-        case let .httpStatus(code): "The AI provider returned HTTP \(code)."
-        case .insecureEndpoint: "Cloud AI endpoints require HTTPS; HTTP is allowed only for loopback local services."
+        case .configurationRequired: String(localized: "Configure an AI provider to use this action.")
+        case .policyDenied: String(localized: "The content privacy policy does not permit this provider request.")
+        case .invalidResponse: String(localized: "The AI provider returned an invalid response.")
+        case let .httpStatus(code): String(localized: "The AI provider returned HTTP \(code).")
+        case .insecureEndpoint: String(localized: "Cloud AI endpoints require HTTPS; HTTP is allowed only for loopback local services. Keep credentials out of the URL.")
         }
     }
 }
 
 public enum AIEndpointSecurity {
     public static func validate(_ endpoint: URL) throws {
+        guard let host = endpoint.host, !host.isEmpty,
+              endpoint.user == nil, endpoint.password == nil else {
+            throw AIProviderError.insecureEndpoint
+        }
         if endpoint.scheme?.lowercased() == "https" { return }
-        let host = endpoint.host?.lowercased()
-        if endpoint.scheme?.lowercased() == "http",
-           host == "localhost" || host == "127.0.0.1" || host == "::1" {
+        if endpoint.scheme?.lowercased() == "http", isLoopback(endpoint) {
             return
         }
         throw AIProviderError.insecureEndpoint
+    }
+
+    public static func isLoopback(_ endpoint: URL) -> Bool {
+        ["localhost", "127.0.0.1", "::1", "[::1]"].contains(endpoint.host?.lowercased() ?? "")
     }
 }
 

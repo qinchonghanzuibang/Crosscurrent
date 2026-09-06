@@ -186,6 +186,8 @@ public actor URLSessionWeChatProviderTransport: WeChatProviderTransport {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.httpCookieAcceptPolicy = .never
             configuration.httpShouldSetCookies = false
+            configuration.httpCookieStorage = nil
+            configuration.urlCredentialStorage = nil
             configuration.urlCache = nil
             self.session = URLSession(configuration: configuration)
         }
@@ -199,10 +201,26 @@ public actor URLSessionWeChatProviderTransport: WeChatProviderTransport {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
         urlRequest.setValue("Crosscurrent/1", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await session.data(for: urlRequest, delegate: WeChatProviderRedirectDelegate())
         guard let http = response as? HTTPURLResponse else { throw ConnectorError.invalidResponse("not an HTTP response") }
         guard data.count <= 20 * 1_024 * 1_024 else { throw ConnectorError.invalidResponse("provider response exceeded size limit") }
         return WeChatProviderHTTPResponse(data: data, statusCode: http.statusCode)
+    }
+}
+
+private final class WeChatProviderRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(
+        _: URLSession, task: URLSessionTask, willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        guard let original = task.originalRequest?.url, let destination = request.url,
+              destination.scheme?.lowercased() == "https", destination.user == nil, destination.password == nil,
+              destination.host?.lowercased() == original.host?.lowercased(),
+              (destination.port ?? 443) == (original.port ?? 443) else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
     }
 }
 

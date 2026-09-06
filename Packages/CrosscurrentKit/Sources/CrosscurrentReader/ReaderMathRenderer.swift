@@ -22,7 +22,10 @@ actor ReaderMathRenderer {
         do {
             let document = try SwiftSoup.parseBodyFragment(html)
             let textNodes = try document.getAllElements().flatMap { element in
-                if ["code", "pre", "math", "svg"].contains(element.tagName()) { return [TextNode]() }
+                let excluded = Set(["code", "pre", "math", "svg"])
+                if excluded.contains(element.tagName()) || element.parents().contains(where: { excluded.contains($0.tagName()) }) {
+                    return [TextNode]()
+                }
                 return element.getChildNodes().compactMap { $0 as? TextNode }
             }
             for node in textNodes {
@@ -69,6 +72,7 @@ actor ReaderMathRenderer {
             converted = try renderer.tex2mml(compatibleTex, conversionOptions: options)
         }
         let sanitized = try StaticHTMLPreprocessor.conservativeSanitize(converted).sanitizedHTML
+        if cache.count >= 256 { cache.removeAll(keepingCapacity: true) }
         cache[key] = sanitized
         return sanitized
     }

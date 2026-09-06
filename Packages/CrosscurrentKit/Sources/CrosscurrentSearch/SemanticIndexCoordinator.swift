@@ -54,6 +54,9 @@ public actor SemanticIndexCoordinator {
 
     public func rebuild(batchSize: Int = 16) async throws -> SemanticIndexUpdate {
         let descriptor = await runtime.descriptor
+        // Capture before reading inputs: concurrent writes must leave this
+        // namespace stale, so the next activation picks them up.
+        let generation = try await repository.generations()[.searchInputs]?.generation ?? 0
         let documents = try await repository.searchDocuments(includeHistory: false)
         let current = documents.filter { !$0.isHistorical }
         let keys = current.map { "\($0.kind):\($0.stableID)" }
@@ -74,7 +77,6 @@ public actor SemanticIndexCoordinator {
             try? FileManager.default.removeItem(at: buildRoot)
             throw error
         }
-        let generation = try await repository.generations()[.searchInputs]?.generation ?? 0
         let manifest = ActiveNamespace(descriptor: descriptor, buildID: buildID, generation: generation, switchedAt: .now)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]

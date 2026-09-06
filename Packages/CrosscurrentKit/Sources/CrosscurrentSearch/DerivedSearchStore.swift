@@ -71,20 +71,22 @@ public actor DerivedSearchStore {
         let trimmed = query.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !query.kinds.isEmpty else { return [] }
         let limit = max(1, min(query.limit, 200))
+        let kinds = query.kinds.map(\.rawValue).sorted()
+        let kindFilter = "kind IN (" + Array(repeating: "?", count: kinds.count).joined(separator: ",") + ")"
         return try database.read { db in
             var results: [SearchResult] = []
             if let short = BilingualTokenizer.shortHanQueryToken(trimmed) {
                 let rows = try Row.fetchAll(
                     db,
-                    sql: "SELECT kind, stable_id, revision_id, title, body FROM current_short_cjk WHERE token=? AND token_length=? LIMIT ?",
-                    arguments: [short.token, short.length, limit * 3]
+                    sql: "SELECT kind, stable_id, revision_id, title, body FROM current_short_cjk WHERE token=? AND token_length=? AND \(kindFilter) LIMIT ?",
+                    arguments: StatementArguments([short.token, short.length] as [any DatabaseValueConvertible]) + StatementArguments(kinds) + [limit * 3]
                 )
                 results += rows.compactMap { makeResult(row: $0, score: short.length == 2 ? 2.0 : 1.7, historical: false, query: trimmed) }
                 if query.includeHistory {
                     let historyRows = try Row.fetchAll(
                         db,
-                        sql: "SELECT kind, stable_id, revision_id, title, body FROM historical_short_cjk WHERE token=? AND token_length=? LIMIT ?",
-                        arguments: [short.token, short.length, limit]
+                        sql: "SELECT kind, stable_id, revision_id, title, body FROM historical_short_cjk WHERE token=? AND token_length=? AND \(kindFilter) LIMIT ?",
+                        arguments: StatementArguments([short.token, short.length] as [any DatabaseValueConvertible]) + StatementArguments(kinds) + [limit]
                     )
                     results += historyRows.compactMap { makeResult(row: $0, score: short.length == 2 ? 1.2 : 1.0, historical: true, query: trimmed) }
                 }
@@ -92,27 +94,27 @@ public actor DerivedSearchStore {
                 let ftsExpression = Self.ftsExpression(trimmed)
                 let wordRows = try Row.fetchAll(
                     db,
-                    sql: "SELECT kind, stable_id, revision_id, title, body, bm25(current_fts, 6.0, 1.0) AS rank FROM current_fts WHERE current_fts MATCH ? ORDER BY rank LIMIT ?",
-                    arguments: [ftsExpression, limit * 2]
+                    sql: "SELECT kind, stable_id, revision_id, title, body, bm25(current_fts, 0, 0, 0, 0, 6.0, 1.0) AS rank FROM current_fts WHERE current_fts MATCH ? AND \(kindFilter) ORDER BY rank LIMIT ?",
+                    arguments: [ftsExpression] + StatementArguments(kinds) + [limit * 2]
                 )
-                results += wordRows.compactMap { row in makeResult(row: row, score: 1 / (1 + abs(row["rank"] as Double)), historical: false, query: trimmed) }
+                results += wordRows.compactMap { row in makeResult(row: row, score: 1 + abs(row["rank"] as Double), historical: false, query: trimmed) }
                 if Array(trimmed).count >= 3 {
                     let trigramRows = try Row.fetchAll(
                         db,
-                        sql: "SELECT kind, stable_id, revision_id, title, body, bm25(current_trigram, 5.0, 1.0) AS rank FROM current_trigram WHERE current_trigram MATCH ? ORDER BY rank LIMIT ?",
-                        arguments: [Self.ftsExpression(trimmed), limit]
+                        sql: "SELECT kind, stable_id, revision_id, title, body, bm25(current_trigram, 0, 0, 0, 5.0, 1.0) AS rank FROM current_trigram WHERE current_trigram MATCH ? AND \(kindFilter) ORDER BY rank LIMIT ?",
+                        arguments: [Self.ftsExpression(trimmed)] + StatementArguments(kinds) + [limit]
                     )
-                    results += trigramRows.compactMap { row in makeResult(row: row, score: 0.8 / (1 + abs(row["rank"] as Double)), historical: false, query: trimmed) }
+                    results += trigramRows.compactMap { row in makeResult(row: row, score: 0.8 * (1 + abs(row["rank"] as Double)), historical: false, query: trimmed) }
                 }
             }
 
             if query.includeHistory, BilingualTokenizer.shortHanQueryToken(trimmed) == nil {
                 let historyRows = try Row.fetchAll(
                     db,
-                    sql: "SELECT kind, stable_id, revision_id, title, body, bm25(historical_fts, 6.0, 1.0) AS rank FROM historical_fts WHERE historical_fts MATCH ? ORDER BY rank LIMIT ?",
-                    arguments: [Self.ftsExpression(trimmed), limit]
+                    sql: "SELECT kind, stable_id, revision_id, title, body, bm25(historical_fts, 0, 0, 0, 0, 6.0, 1.0) AS rank FROM historical_fts WHERE historical_fts MATCH ? AND \(kindFilter) ORDER BY rank LIMIT ?",
+                    arguments: [Self.ftsExpression(trimmed)] + StatementArguments(kinds) + [limit]
                 )
-                results += historyRows.compactMap { row in makeResult(row: row, score: 0.6 / (1 + abs(row["rank"] as Double)), historical: true, query: trimmed) }
+                results += historyRows.compactMap { row in makeResult(row: row, score: 0.6 * (1 + abs(row["rank"] as Double)), historical: true, query: trimmed) }
             }
 
             let allowedKinds = Set(query.kinds.map(\.rawValue))
@@ -215,10 +217,34 @@ public actor DerivedSearchStore {
 }
 
 public enum ReciprocalRankFusion {
-    public static func fuse(lexical: [SearchResult], semantic: [(String, Double)], constant: Double = 60) -> [String: Double] {
-        var scores: [String: Double] = [:]
-        for (index, result) in lexical.enumerated() { scores[result.stableID, default: 0] += 1 / (constant + Double(index + 1)) }
-        for (index, result) in semantic.enumerated() { scores[result.0, default: 0] += 1 / (constant + Double(index + 1)) }
-        return scores
+    /// Combines ordered result lists without comparing BM25 and cosine scales.
+    /// Normalize by the maximum possible contribution to keep scores in 0...1.
+    public static func fuse(lexical: [SearchResult], semantic: [SearchResult], limit: Int = 50) -> [SearchResult] {
+        let lists = [lexical, semantic].filter { !$0.isEmpty }
+        guard !lists.isEmpty, limit > 0 else { return [] }
+        let constant = 60.0
+        var merged: [String: SearchResult] = [:]
+        for list in lists {
+            var seen = Set<String>()
+            var rank = 0
+            for result in list where seen.insert(result.id).inserted {
+                rank += 1
+                let contribution = (constant + 1) / (constant + Double(rank)) / Double(lists.count)
+                if var existing = merged[result.id] {
+                    existing.matchReasons.formUnion(result.matchReasons)
+                    existing.score += contribution
+                    merged[result.id] = existing
+                } else {
+                    var ranked = result
+                    ranked.score = contribution
+                    merged[result.id] = ranked
+                }
+            }
+        }
+        return merged.values.sorted { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            if lhs.title != rhs.title { return lhs.title < rhs.title }
+            return lhs.id < rhs.id
+        }.prefix(min(limit, 200)).map { $0 }
     }
 }

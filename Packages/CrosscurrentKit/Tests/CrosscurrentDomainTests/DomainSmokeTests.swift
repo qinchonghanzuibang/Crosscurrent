@@ -194,11 +194,17 @@ private actor FixtureEmbeddingRuntime: EmbeddingRuntime {
     let descriptor = EmbeddingDescriptor(runtimeID: "fixture-runtime", modelID: "fixture-model", modelRevision: "1", dimension: 3, scalarType: .float32, pooling: "fixture", normalization: "l2")
     private var fails = false
     private var maximumBatchSize = 0
+    private var onNextEmbedding: (@Sendable () async throws -> Void)?
 
     func setFails(_ value: Bool) { fails = value }
+    func beforeNextEmbedding(_ operation: @escaping @Sendable () async throws -> Void) { onNextEmbedding = operation }
     func observedMaximumBatchSize() -> Int { maximumBatchSize }
-    func embed(_ texts: [String], kind _: EmbeddingInputKind) throws -> [[Float]] {
+    func embed(_ texts: [String], kind _: EmbeddingInputKind) async throws -> [[Float]] {
         if fails { throw CocoaError(.fileReadCorruptFile) }
+        if let operation = onNextEmbedding {
+            onNextEmbedding = nil
+            try await operation()
+        }
         maximumBatchSize = max(maximumBatchSize, texts.count)
         return texts.map { text in
             let value = text.lowercased()
@@ -242,4 +248,67 @@ private actor FixtureEmbeddingRuntime: EmbeddingRuntime {
     #expect(reused.documentCount == update.documentCount)
     await #expect(throws: (any Error).self) { try await coordinator.rebuild() }
     #expect(try Data(contentsOf: manifestURL) == activeBeforeFailure)
+
+    await runtime.setFails(false)
+    await runtime.beforeNextEmbedding {
+        let revision = SourceRevision(sourceID: SourceID(), displayName: "New during embedding")
+        _ = try await repository.saveSource(LogicalSource(id: revision.sourceID, currentRevisionID: revision.id, kind: .publication), revision: revision)
+    }
+    let stale = try await coordinator.rebuild()
+    #expect(stale.canonicalGeneration < (try await repository.generations()[.searchInputs]?.generation ?? 0))
+    let refreshed = try await coordinator.activateOrRebuild()
+    #expect(refreshed.documentCount == stale.documentCount + 1)
+    #expect(refreshed.canonicalGeneration == (try await repository.generations()[.searchInputs]?.generation ?? 0))
+}
+
+@Test func searchRanksTitleMatchesAndFiltersKindsBeforeLimiting() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentSearchRelevance-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try DerivedSearchStore(directory: root)
+    var documents = (0..<80).map { index in
+        SearchDocument(stableID: "filler-\(index)", kind: .event, title: "Other material \(index)", body: "Unrelated background")
+    }
+    documents += [
+        SearchDocument(stableID: "title", kind: .event, title: "Needle", body: "Other background material"),
+        SearchDocument(stableID: "body", kind: .event, title: "A background", body: "Other material needle"),
+    ]
+    try await store.synchronize(documents, canonicalGeneration: 1)
+    #expect(try await store.search(SearchQuery(text: "needle")).first?.stableID == "title")
+    documents = (0..<220).map { index in
+        SearchDocument(stableID: "event-\(index)", kind: .event, title: "Needle 智能", body: "matching evidence")
+    }
+    documents.append(SearchDocument(stableID: "source", kind: .source, title: "Needle 智能", body: "matching evidence"))
+    try await store.synchronize(documents, canonicalGeneration: 2)
+    for query in ["needle", "智能"] {
+        #expect(try await store.search(SearchQuery(text: query, kinds: [.source], limit: 1)).map(\.stableID) == ["source"])
+    }
+}
+
+@Test func pairwiseClusteringConstraintsApplyFromEitherSide() {
+    let left = SegmentLineageID(), right = SegmentLineageID(), eventID = EventID()
+    let candidate = EventCandidateScore(eventID: eventID, semantic: 1, entityOverlap: 1, topicOverlap: 1, temporal: 1, title: 1, citation: 1, independence: 1, coherence: 1, memberLineages: [left])
+    let forbidden = ClusteringConstraint(kind: .cannotLink, leftLineageID: left, rightLineageID: right)
+    #expect(DeterministicClusteringEngine.assign(segmentLineageID: right, candidates: [candidate], constraints: [forbidden]).eventIDs.isEmpty)
+    var lowScore = candidate
+    lowScore.semantic = 0
+    let required = ClusteringConstraint(kind: .mustLink, leftLineageID: left, rightLineageID: right)
+    let assignment = DeterministicClusteringEngine.assign(segmentLineageID: right, candidates: [lowScore], constraints: [required])
+    #expect(assignment.eventIDs == [eventID] && assignment.wasForcedByUser)
+}
+
+@Test func hybridSearchUsesRankAndKeepsKindsAndRevisionsDistinct() {
+    func result(_ stableID: String, kind: SearchDocumentKind = .event, revision: String = "current", score: Double, semantic: Bool = false) -> SearchResult {
+        SearchResult(stableID: stableID, kind: kind, revisionID: revision, title: stableID, snippet: "Evidence", score: score, isHistorical: revision == "older", matchReasons: semantic ? [.semantic] : [.lexical])
+    }
+    let lexical = [result("title", score: 100), result("both", score: 0.0001), result("both", kind: .item, score: 0.00001)]
+    let semantic = [result("both", score: 0.99, semantic: true), result("related", score: 0.98, semantic: true), result("both", revision: "older", score: 0.97, semantic: true)]
+    let fused = ReciprocalRankFusion.fuse(lexical: lexical, semantic: semantic)
+    #expect(fused.first?.id == lexical[1].id)
+    #expect(fused.first?.matchReasons == [.lexical, .semantic])
+    #expect(fused.allSatisfy { $0.score > 0 && $0.score <= 1 })
+    #expect(fused.count == 5)
+    #expect(fused.first { $0.kind == .item }?.matchReasons == [.lexical])
+    #expect(fused.first { $0.revisionID == "older" }?.matchReasons == [.semantic])
+    #expect(ReciprocalRankFusion.fuse(lexical: lexical, semantic: []).map(\.id) == lexical.map(\.id))
+    #expect(ReciprocalRankFusion.fuse(lexical: lexical + [lexical[1]], semantic: semantic) == fused)
 }

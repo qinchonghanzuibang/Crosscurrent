@@ -22,6 +22,7 @@ public actor ShareInboxImporter {
     private let web: WebConnector
     private let manager: FileManager
     private let leaseOwner: String
+    private let blobStore: CanonicalBlobStore
 
     public init(
         locations: DatabaseLocations,
@@ -35,6 +36,7 @@ public actor ShareInboxImporter {
         web = WebConnector(http: http)
         self.manager = manager
         self.leaseOwner = leaseOwner
+        blobStore = CanonicalBlobStore(locations: locations, repository: repository)
     }
 
     public func importAvailable(limit: Int = 20, now: Date = .now) async throws -> ShareInboxImportBatch {
@@ -48,7 +50,7 @@ public actor ShareInboxImporter {
 
         var batch = ShareInboxImportBatch()
         for original in records.prefix(max(1, limit)) {
-            let claimed = original.appendingPathExtension("lease-\(leaseOwner)")
+            let claimed = original.appendingPathExtension("lease-\(Int(now.timeIntervalSince1970))-\(leaseOwner)")
             do {
                 try manager.moveItem(at: original, to: claimed)
             } catch {
@@ -124,7 +126,7 @@ public actor ShareInboxImporter {
             coverageCandidate: SourceCoverageAssertion(sourceID: sourceID, ecosystem: .unknown, provenance: .user, confidence: .unknown),
             recentCandidates: [candidate]
         )
-        let service = SourceDiscoveryService(repository: repository)
+        let service = SourceDiscoveryService(repository: repository, blobStore: blobStore)
         return try await service.commit(discovery, idempotencyPrefix: "share:\(record.id.uuidString.lowercased())").importedItems
     }
 
@@ -135,8 +137,14 @@ public actor ShareInboxImporter {
             options: [.skipsHiddenFiles]
         )
         for file in files where file.lastPathComponent.contains(".json.lease-") {
-            let values = try file.resourceValues(forKeys: [.contentModificationDateKey])
-            guard let modified = values.contentModificationDate, now.timeIntervalSince(modified) > 10 * 60 else { continue }
+            let suffix = file.lastPathComponent.components(separatedBy: ".lease-").last ?? ""
+            let timestamp = suffix.split(separator: "-", maxSplits: 1).first.flatMap { value in
+                value.count >= 10 ? TimeInterval(value) : nil
+            }
+            let acquiredAt: Date?
+            if let timestamp { acquiredAt = Date(timeIntervalSince1970: timestamp) }
+            else { acquiredAt = try file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
+            guard let acquiredAt, now.timeIntervalSince(acquiredAt) > 10 * 60 else { continue }
             let name = file.lastPathComponent.components(separatedBy: ".lease-").first ?? file.deletingPathExtension().lastPathComponent
             let recovered = locations.shareInbox.appending(path: name)
             if !manager.fileExists(atPath: recovered.path) { try? manager.moveItem(at: file, to: recovered) }
