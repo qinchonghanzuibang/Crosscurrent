@@ -5,7 +5,6 @@ import SwiftUI
 
 struct TodayView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var everythingExpanded = false
 
     var body: some View {
         ScrollView {
@@ -14,9 +13,9 @@ struct TodayView: View {
                 if model.events.isEmpty {
                     VStack(spacing: 14) {
                         ContentUnavailableView(
-                            "No Events Yet",
+                            "Your briefing starts here",
                             systemImage: "newspaper",
-                            description: Text("Add or refresh Sources to build your first evidence-backed daily briefing.")
+                            description: Text("Add a source to bring the stories you follow into Today.")
                         )
                         Button("Add a Source") { model.showAddSource() }
                             .buttonStyle(.borderedProminent)
@@ -27,7 +26,7 @@ struct TodayView: View {
                     ContentUnavailableView {
                         Label("No new developments", systemImage: "checkmark.circle")
                     } description: {
-                        Text("Your library is ready. Explore Flow for earlier articles, or refresh your sources for new developments.")
+                        Text("Explore Flow for earlier stories, or refresh your sources.")
                     } actions: {
                         Button("Explore Flow") { model.selection = .flow }
                     }
@@ -36,7 +35,7 @@ struct TodayView: View {
                     let lead = section(.today)
                     SectionRule("Worth knowing", trailing: Self.leadEventCount(lead.count))
                     if lead.isEmpty {
-                        Text("No Event currently meets the evidence and relevance bar for the top five. The remaining briefing stays available below.")
+                        Text("No highlights right now. More stories are available below.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .padding(.vertical, 8)
@@ -51,12 +50,12 @@ struct TodayView: View {
                     optionalSection("From Your Follows", events: section(.peopleYouFollow))
                     optionalSection("Worth Reading", events: section(.worthReading))
                     if !section(.chinaGlobal).isEmpty {
-                        SectionRule("China ↔ Global", trailing: "Evidence-qualified comparison")
+                        SectionRule("China ↔ Global")
                         compactRows(section(.chinaGlobal))
                     }
                     let remaining = section(.everythingElse)
                     if !remaining.isEmpty {
-                        DisclosureGroup(isExpanded: $everythingExpanded) {
+                        DisclosureGroup(isExpanded: $model.todayEverythingExpanded) {
                             compactRows(remaining)
                         } label: {
                             Text("Everything Else · \(remaining.count)").font(.title3.bold())
@@ -99,9 +98,6 @@ struct TodayView: View {
                 VStack(alignment: .trailing, spacing: 3) {
                     Text(model.digestRevisionReason == .initialDaily ? "Daily snapshot" : "Updated briefing").font(.subheadline.weight(.semibold))
                     Text(model.digestUpdatedAt.formatted(date: .omitted, time: .shortened)).font(.caption).foregroundStyle(.secondary)
-                    if !model.providerConfigured {
-                        Label("Local briefing", systemImage: "cpu").font(.caption2).foregroundStyle(.secondary)
-                    }
                 }
             }
             Rectangle().frame(height: 3).foregroundStyle(.primary)
@@ -111,21 +107,42 @@ struct TodayView: View {
     private func compactRows(_ events: [EventCardModel]) -> some View {
         VStack(spacing: 0) {
             ForEach(events) { event in
-                Button { model.open(event) } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        EventReadMarker(event.readStatus)
-                        Text(event.title).font(.headline).foregroundStyle(.primary).multilineTextAlignment(.leading)
-                        Spacer()
-                        Text(event.primarySource).font(.caption).foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 10) {
+                    Button { model.open(event) } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            EventReadMarker(event.readStatus).padding(.top, 3)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(event.title)
+                                    .font(.system(size: 14, weight: event.readStatus == .read ? .medium : .semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(2)
+                                HStack {
+                                    Text(event.primarySource).lineLimit(1)
+                                    Spacer(minLength: 8)
+                                    EventTimestamp(date: event.date)
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("today-compact-event-\(event.id.description)")
+                    if !event.reasons.isEmpty {
                         Menu {
-                            Text("Why here?")
-                            ForEach(event.reasons, id: \.self) { Text(LocalizedStringKey(reasonLabel($0))) }
-                        } label: { Image(systemName: "info.circle").foregroundStyle(.secondary) }
+                            ForEach(event.reasons, id: \.self) { Text(eventRankingReasonLabel($0)) }
+                        } label: { Label("Why this story?", systemImage: "info.circle") }
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(.secondary)
                         .menuStyle(.borderlessButton)
-                    }.padding(.vertical, 11)
+                        .fixedSize()
+                        .help("Why this story?")
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("today-compact-event-\(event.id.description)")
+                .padding(.vertical, 10)
                 Divider()
             }
         }
@@ -147,22 +164,6 @@ struct TodayView: View {
         String.localizedStringWithFormat(String(localized: "%lld lead events"), count)
     }
 
-    private func reasonLabel(_ reason: RankingReason) -> String {
-        switch reason {
-        case .followedSource: "From a Source you follow"
-        case .followedPerson: "From a person you follow"
-        case .followedTopic: "Matches a Topic you follow"
-        case .primarySource: "Strong primary evidence"
-        case .independentCoverage: "Independent coverage"
-        case .rapidGrowth: "Coverage is accelerating"
-        case .novelDevelopment: "Material new development"
-        case .chinaGlobalCoverage: "Evidence across ecosystems"
-        case .savedRelationship: "Related to something saved"
-        case .freshPublication: "Fresh publication"
-        case .materialUpdate: "Material update"
-        case .readingValue: "Substantial primary reading"
-        }
-    }
 }
 
 private struct TodayEventCard: View {
@@ -189,24 +190,24 @@ private struct TodayEventCard: View {
                         .font(.body)
                         .foregroundStyle(.secondary)
                         .lineSpacing(3)
-                        .lineLimit(3)
+                        .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     HStack(spacing: 9) {
                         SourceMonogram(event.primarySource, size: 24)
-                        Text(event.primarySource).font(.caption.weight(.semibold))
-                        Text(Self.sourceSummary(independent: event.independentSourceCount, total: event.sourceCount)).font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Text(event.date, style: .relative).font(.caption).foregroundStyle(.secondary)
+                        Text(event.primarySource).font(.caption.weight(.semibold)).lineLimit(1)
+                        if event.sourceCount > 1 {
+                            Text(String.localizedStringWithFormat(String(localized: "%lld sources"), event.sourceCount))
+                                .font(.caption).foregroundStyle(.secondary).fixedSize()
+                        }
+                        Spacer(minLength: 8)
+                        EventTimestamp(date: event.date).font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    private static func sourceSummary(independent: Int, total: Int) -> String {
-        String.localizedStringWithFormat(String(localized: "%lld independent · %lld sources"), independent, total)
+        .help(event.reasons.map(eventRankingReasonLabel).joined(separator: "\n"))
     }
 
 }

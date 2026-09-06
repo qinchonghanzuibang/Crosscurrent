@@ -1,3 +1,4 @@
+import AppKit
 import CrosscurrentDesignSystem
 import CrosscurrentDomain
 import CrosscurrentModels
@@ -45,7 +46,7 @@ struct EventDetailView: View {
                 coverage = loaded.2
             }
             .toolbar {
-                if event.sourceCount > 1 && !readingPrimary {
+                if event.sourceCount > 1 && event.membershipCount > 1 && !readingPrimary {
                     ToolbarItemGroup {
                     Button("Back", systemImage: "chevron.left") { model.closeEvent() }
                     Button { model.toggleSaved(event) } label: {
@@ -238,34 +239,14 @@ private struct ReaderPane: View {
     @State private var selection: ReaderSelectionContext?
     @State private var activatedLink: URL?
     @State private var linkPreview: LinkPreview?
+    @State private var linkPreviewLoading = false
+    @State private var linkPreviewMessage: String?
     @State private var showOriginal = false
     @State private var readerFocusRequest = 0
     private let previewFetcher = LinkPreviewFetcher()
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Button(action: backAction) { Label("Back", systemImage: "chevron.left") }
-                Divider().frame(height: 18)
-                SourceMonogram(event.primarySource, size: 24)
-                Text(event.primarySource).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Spacer()
-                if !model.focusReading {
-                    Button { model.toggleSaved(event) } label: { Image(systemName: model.savedEventIDs.contains(event.id) ? "bookmark.fill" : "bookmark") }
-                        .help(model.savedEventIDs.contains(event.id) ? "Saved" : "Save")
-                    Button { model.setEventUnread(event) } label: { Image(systemName: "envelope.badge") }.help("Mark Unread")
-                    Button { openOriginal() } label: { Image(systemName: "safari") }.help("Open Original").disabled(event.originalURL == nil)
-                }
-                Menu {
-                    Button("Summary") { openSummary() }
-                    Button("Key points") { openKeyPoints() }
-                    Button("Ask article") { openAskArticle() }
-                } label: { Image(systemName: "ellipsis.circle") }
-                Button { model.toggleFocusReading() } label: { Image(systemName: model.focusReading ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
-                    .help(model.focusReading ? "Exit Focus Reading" : "Focus Reading (⇧⌘F)")
-                    .accessibilityLabel(model.focusReading ? "Exit Focus Reading" : "Focus Reading")
-                    .accessibilityIdentifier("reader-focus-toggle")
-            }.padding(.horizontal, 12).frame(height: model.focusReading ? 38 : 44)
             if selection != nil && !model.focusReading {
                 HStack(spacing: 8) {
                     Text("Selected text").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -275,60 +256,88 @@ private struct ReaderPane: View {
                     Button("Ask AI") { runSelection(.askAI) }
                     Spacer()
                 }
-                .buttonStyle(.borderless).controlSize(.small).padding(.horizontal, 12).padding(.vertical, 6)
-                .background(.quaternary.opacity(0.3))
+                .buttonStyle(.borderless).controlSize(.small).padding(.horizontal, 16).padding(.vertical, 8)
+                .background(.bar)
             }
-            if let linkPreview {
-                HStack(spacing: 10) {
-                    Image(systemName: "link")
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(linkPreview.title).font(.subheadline.weight(.semibold))
-                        if let summary = linkPreview.summary { Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-                    }
-                    Spacer()
-                    Button("Preview") { showOriginal = true }
-                }.padding(10).background(.quaternary.opacity(0.35))
+            if let activatedLink {
+                linkPreviewBar(for: activatedLink)
             }
-            Divider()
-            HStack(spacing: 0) {
-                ReaderWebView(
-                    document: ReaderDocument(id: event.revisionID.description, title: event.title, byline: event.primarySource, sanitizedHTML: event.bodyHTML, baseURL: event.originalURL, itemRevisionID: event.primaryItemRevisionID),
-                    selection: $selection,
-                    activatedLink: $activatedLink,
-                    focusRequest: readerFocusRequest,
-                    onEscape: {
-                        if model.handleReaderEscape() == .navigateBack { backAction() }
+            GeometryReader { geometry in
+                let overlaysInsights = geometry.size.width < 950
+                ZStack(alignment: .trailing) {
+                    HStack(spacing: 0) {
+                        ReaderWebView(
+                            document: ReaderDocument(id: event.revisionID.description, title: event.title, byline: event.primarySource, publishedAt: evidence.first(where: { $0.itemRevisionID == event.primaryItemRevisionID })?.publishedAt, sanitizedHTML: event.bodyHTML, baseURL: event.originalURL, itemRevisionID: event.primaryItemRevisionID),
+                            selection: $selection,
+                            activatedLink: $activatedLink,
+                            focusRequest: readerFocusRequest,
+                            onEscape: {
+                                if model.handleReaderEscape() == .navigateBack { backAction() }
+                            }
+                        )
+                        if let insights = model.readerInsights, !overlaysInsights {
+                            Divider()
+                            insightsPanel(insights).frame(width: 320)
+                        }
                     }
-                )
-                if let insights = model.readerInsights {
-                    Divider()
-                    ReaderInsightsPanel(
-                        state: insights,
-                        onClose: model.dismissReaderInsights,
-                        onRetry: retryInsights,
-                        onAsk: runArticleQuestion
-                    )
-                    .frame(minWidth: 320, idealWidth: 370, maxWidth: 420, maxHeight: .infinity)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    if let insights = model.readerInsights, overlaysInsights {
+                        Color.black.opacity(0.08)
+                            .onTapGesture { model.dismissReaderInsights() }
+                            .accessibilityHidden(true)
+                        insightsPanel(insights)
+                            .frame(width: min(360, max(280, geometry.size.width - 32)))
+                            .overlay(alignment: .leading) { Divider() }
+                            .shadow(color: .black.opacity(0.12), radius: 12, x: -4)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
                 }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: model.readerInsights?.id)
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.readerInsights?.id)
+        }
+        .navigationTitle(event.primarySource)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button("Back", systemImage: "chevron.left", action: backAction)
+                    .help("Back")
+            }
+            ToolbarItemGroup(placement: .primaryAction) {
+                if !model.focusReading {
+                    Button { model.toggleSaved(event) } label: {
+                        Label(model.savedEventIDs.contains(event.id) ? "Saved" : "Save", systemImage: model.savedEventIDs.contains(event.id) ? "bookmark.fill" : "bookmark")
+                    }
+                    .help(model.savedEventIDs.contains(event.id) ? "Saved" : "Save")
+                    Button("Open Original", systemImage: "safari") { openOriginal() }
+                        .help("Open Original").disabled(event.originalURL == nil)
+                }
+                Menu {
+                    Button("Summary") { openSummary() }
+                    Button("Key points") { openKeyPoints() }
+                    Button("Ask article") { openAskArticle() }
+                    Divider()
+                    Button("Mark Unread") { model.setEventUnread(event) }
+                } label: { Label("Reader actions", systemImage: "ellipsis.circle") }
+                .help("Reader actions")
+                .accessibilityLabel("Reader actions")
+                Button { model.toggleFocusReading() } label: {
+                    Label(model.focusReading ? "Exit Focus Reading" : "Focus Reading", systemImage: model.focusReading ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                }
+                .help(model.focusReading ? "Exit Focus Reading" : "Focus Reading (⇧⌘F)")
+                .accessibilityIdentifier("reader-focus-toggle")
+            }
         }
         .task(id: activatedLink) {
-            guard let activatedLink else { linkPreview = nil; return }
+            linkPreview = nil
+            linkPreviewMessage = nil
+            guard let activatedLink else { linkPreviewLoading = false; return }
+            linkPreviewLoading = true
+            defer { if self.activatedLink == activatedLink { linkPreviewLoading = false } }
             do {
                 let preview = try await previewFetcher.preview(for: activatedLink)
                 guard !Task.isCancelled else { return }
                 linkPreview = preview
-            } catch is CancellationError { return }
-            catch {
+            } catch {
                 guard !Task.isCancelled else { return }
-                model.presentReaderInsights(ReaderInsightsState(
-                    kind: .linkPreview,
-                    title: String(localized: "Link preview unavailable"),
-                    phase: .error,
-                    message: error.localizedDescription
-                ))
+                linkPreviewMessage = String(localized: "Preview unavailable. You can still open the link.")
             }
         }
         .onChange(of: model.readerInsights?.id) { oldValue, newValue in
@@ -336,9 +345,47 @@ private struct ReaderPane: View {
         }
         .sheet(isPresented: $showOriginal) {
             if let url = activatedLink ?? event.originalURL {
-                PublicOriginalWebView(url: url).frame(minWidth: 900, minHeight: 650)
+                ReaderOriginalSheet(url: url)
             }
         }
+    }
+
+    private func insightsPanel(_ insights: ReaderInsightsState) -> some View {
+        ReaderInsightsPanel(
+            state: insights,
+            onClose: model.dismissReaderInsights,
+            onRetry: retryInsights,
+            onAsk: runArticleQuestion
+        )
+        .id(insights.id)
+        .frame(maxHeight: .infinity)
+        .onExitCommand { model.dismissReaderInsights() }
+    }
+
+    private func linkPreviewBar(for url: URL) -> some View {
+        HStack(spacing: 10) {
+            Group {
+                if linkPreviewLoading { ProgressView().controlSize(.small) }
+                else { Image(systemName: "link").foregroundStyle(.secondary) }
+            }.frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(linkPreview?.title ?? url.host ?? url.absoluteString)
+                    .font(.subheadline.weight(.medium)).lineLimit(1)
+                Text(linkPreviewMessage ?? linkPreview?.summary ?? (linkPreviewLoading ? String(localized: "Loading preview…") : url.absoluteString))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Button("Open Link") { showOriginal = true }
+            Button {
+                activatedLink = nil
+                linkPreview = nil
+                readerFocusRequest += 1
+            } label: { Label("Dismiss link preview", systemImage: "xmark") }
+            .labelStyle(.iconOnly).buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private var extractiveSummary: [ReaderInsightPoint] {
@@ -566,12 +613,65 @@ private struct ReaderPane: View {
 
 }
 
+struct ReaderOriginalSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    var url: URL
+    @State private var loadState: OriginalPageLoadState = .loading
+    @State private var reloadRequest = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Original page").font(.headline)
+                    Text(url.host ?? url.absoluteString).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 12)
+                if ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
+                    Button("Open in Browser", systemImage: "arrow.up.right.square") { NSWorkspace.shared.open(url) }
+                }
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            Divider()
+            PublicOriginalWebView(url: url, reloadRequest: reloadRequest, onEscape: { dismiss() }, onLoadStateChange: { loadState = $0 })
+                .overlay {
+                    if loadState == .failed {
+                        VStack(spacing: 12) {
+                            Text("Couldn’t load this page").font(.headline)
+                            Text("Try again, or open it in your browser.")
+                                .foregroundStyle(.secondary)
+                            Button("Retry", systemImage: "arrow.clockwise") {
+                                loadState = .loading
+                                reloadRequest += 1
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(.background)
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if loadState == .loading {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Loading page…").font(.callout).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity).padding(.vertical, 10)
+                        .background(.bar)
+                    }
+                }
+        }
+        .frame(width: 760, height: 520)
+    }
+}
+
 private struct ReaderInsightsPanel: View {
     var state: ReaderInsightsState
     var onClose: () -> Void
     var onRetry: () -> Void
     var onAsk: (String) -> Void
     @State private var question = ""
+    @FocusState private var questionFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -580,7 +680,8 @@ private struct ReaderInsightsPanel: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(action: onClose) { Image(systemName: "xmark") }
+                Button(action: onClose) { Label("Close Insights", systemImage: "xmark") }
+                    .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
                     .help("Close Insights (Esc)")
             }
@@ -619,12 +720,12 @@ private struct ReaderInsightsPanel: View {
                         TextField("Ask about this article", text: $question, axis: .vertical)
                             .textFieldStyle(.roundedBorder)
                             .lineLimit(2...5)
-                        Button("Ask", systemImage: "arrow.up.circle.fill") {
-                            let value = question.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !value.isEmpty else { return }
-                            onAsk(value)
-                        }
+                            .focused($questionFocused)
+                            .onSubmit(submitQuestion)
+                        Button("Ask", systemImage: "arrow.up.circle.fill", action: submitQuestion)
                         .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .help("Ask (⌘↩)")
                         .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                     if let message = state.message {
@@ -641,6 +742,15 @@ private struct ReaderInsightsPanel: View {
         .background(.background)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Reader Insights")
+        .task(id: state.id) {
+            if state.kind == .askArticle, state.phase == .ready { questionFocused = true }
+        }
+    }
+
+    private func submitQuestion() {
+        let value = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, state.phase == .ready || state.phase == .error else { return }
+        onAsk(value)
     }
 
     private func insightPoint(_ point: ReaderInsightPoint) -> some View {

@@ -1,8 +1,19 @@
 import CrosscurrentBrowser
-import CrosscurrentReader
+@testable import CrosscurrentReader
 import Foundation
 import SwiftSoup
 import Testing
+
+@Test func readerSectionLinksStayWithinTheExactSourceDocument() throws {
+    let base = try #require(URL(string: "https://example.com/article?edition=2"))
+    let section = try #require(URL(string: "#comparison", relativeTo: base)?.absoluteURL)
+    #expect(ReaderDocumentNavigation.fragment(for: section, relativeTo: base) == "comparison")
+    let chinese = try #require(URL(string: "#结果", relativeTo: base)?.absoluteURL)
+    #expect(ReaderDocumentNavigation.fragment(for: chinese, relativeTo: base) == "结果")
+    for destination in ["https://example.com/other?edition=2#comparison", "https://other.example/article?edition=2#comparison", "https://example.com/article?edition=3#comparison", "http://example.com/article?edition=2#comparison", "https://example.com/article?edition=2"] {
+        #expect(ReaderDocumentNavigation.fragment(for: try #require(URL(string: destination)), relativeTo: base) == nil)
+    }
+}
 
 @Test func linkPreviewPolicyRejectsLocalAndSecretBearingSchemes() throws {
     #expect(LinkPreviewURLPolicy.allows(try #require(URL(string: "https://example.com/article"))))
