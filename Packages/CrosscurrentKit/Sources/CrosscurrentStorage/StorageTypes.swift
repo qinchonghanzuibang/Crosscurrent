@@ -15,6 +15,7 @@ public enum CrosscurrentStorageError: LocalizedError, Equatable {
     case incompatibleSchema(found: Int, required: Int)
     case migrationRequiresMainApp
     case jobLeaseUnavailable
+    case sourceIdentityConflict(SourceID)
     case invalidStagedData
     case databaseNotInitialized
     case integrityFailure(String)
@@ -28,6 +29,8 @@ public enum CrosscurrentStorageError: LocalizedError, Equatable {
             "Only Crosscurrent may migrate the canonical database."
         case .jobLeaseUnavailable:
             "The job is currently leased by another writer."
+        case .sourceIdentityConflict:
+            "This WeChat publisher is already followed through another acquisition endpoint."
         case .invalidStagedData:
             "Staged data failed validation."
         case .databaseNotInitialized:
@@ -201,6 +204,25 @@ public struct StoredItemState: Codable, Hashable, Sendable {
         self.currentRevisionID = currentRevisionID
         self.currentOrdinal = currentOrdinal
         self.currentContentHash = currentContentHash
+    }
+}
+
+public struct StoredWeChatItemState: Sendable {
+    public var item: StoredItemState
+    public var endpointID: SourceEndpointID
+    public var externalID: String
+    public var hasStoredArticleHTML: Bool
+}
+
+public struct WeChatItemIdentity: Hashable, Sendable {
+    public var externalID: String
+    public var canonicalURL: URL?
+    public var originalURL: URL?
+
+    public init(externalID: String, canonicalURL: URL?, originalURL: URL? = nil) {
+        self.externalID = externalID
+        self.canonicalURL = canonicalURL
+        self.originalURL = originalURL
     }
 }
 
@@ -507,6 +529,7 @@ public struct StoredItemDetail: Identifiable, Codable, Hashable, Sendable {
     public var author: String?
     public var sourceName: String
     public var text: String
+    public var sanitizedHTML: String?
     public var canonicalURL: URL?
     public var originalAccountID: ConnectorAccountID?
     public var publishedAt: Date?

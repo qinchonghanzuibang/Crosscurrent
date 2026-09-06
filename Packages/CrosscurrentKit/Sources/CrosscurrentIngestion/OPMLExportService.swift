@@ -1,3 +1,4 @@
+import CrosscurrentConnectors
 import CrosscurrentDomain
 import CrosscurrentStorage
 import Foundation
@@ -50,7 +51,12 @@ public actor OPMLExportService {
 
     private static func append(source: StoredSourceSnapshot, indent: Int, to lines: inout [String]) {
         let padding = String(repeating: "  ", count: indent)
-        guard let endpoint = source.endpoints.first, let url = endpoint.canonicalURL else { return }
+        let publicWeChat = source.endpoints.filter { endpoint in
+            endpoint.connector == .weChatOfficialAccount && endpoint.canonicalURL.map { url in
+                WeChatCatalogID.allCases.contains { $0.accepts(feedURL: url) }
+            } == true
+        }.min { ($0.weChatAcquisition?.priority ?? 99) < ($1.weChatAcquisition?.priority ?? 99) }
+        guard let endpoint = publicWeChat ?? source.endpoints.first, let url = endpoint.canonicalURL else { return }
         let htmlURL = source.endpoints.first(where: { $0.connector.rawValue == "website" })?.canonicalURL
         var attributes = " text=\"\(escape(source.revision.displayName))\" title=\"\(escape(source.revision.displayName))\" type=\"rss\" xmlUrl=\"\(escape(url.absoluteString))\""
         if let htmlURL { attributes += " htmlUrl=\"\(escape(htmlURL.absoluteString))\"" }

@@ -27,7 +27,7 @@ public actor ArticleContentEnricher {
         // Website candidates contain the fetched document. Feed entries commonly
         // contain only a description; fetch the canonical article when the body is
         // absent or clearly excerpt-sized.
-        if connector != .website, html == nil, existingText.count < 1_200,
+        if connector != .website, connector != .weChatOfficialAccount, html == nil, existingText.count < 1_200,
            let url = candidate.canonicalURL,
            ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
             let response = try await http.get(url, headers: ["Accept": "text/html,application/xhtml+xml;q=0.9"])
@@ -39,8 +39,11 @@ public actor ArticleContentEnricher {
 
         guard let html, !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return candidate }
         if connector == .weChatOfficialAccount {
-            let result = try WeChatHTMLPreprocessor.articleContent(from: html, baseURL: candidate.canonicalURL)
-            guard result.plainText.count >= max(80, existingText.count) else { return candidate }
+            guard let result = try? WeChatHTMLPreprocessor.articleContent(from: html, baseURL: candidate.canonicalURL) else {
+                enriched.contentHTML = nil
+                return enriched
+            }
+            guard result.plainText.count >= max(80, existingText.count) || result.sanitizedHTML.contains("<img ") else { return candidate }
             enriched.title = Self.preferredTitle(extracted: result.title, original: candidate.title)
             enriched.contentHTML = result.sanitizedHTML
             enriched.contentText = result.plainText

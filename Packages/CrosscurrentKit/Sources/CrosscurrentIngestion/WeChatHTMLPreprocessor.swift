@@ -1,4 +1,5 @@
 import CrosscurrentBrowser
+import CrosscurrentConnectors
 import Foundation
 import SwiftSoup
 
@@ -12,9 +13,21 @@ public enum WeChatHTMLPreprocessor {
         }
         let content = try document.select("#js_content, .rich_media_content, article").first() ?? document.body()
         guard let content else { throw WeChatHTMLPreprocessorError.missingBody }
+        for image in try content.select("img") {
+            for attribute in ["src", "data-src", "data-original", "data-lazy-src", "data-actualsrc"] {
+                if let url = URL(string: try image.attr(attribute)), let original = WeChatPublicFeedContent.originalMediaURL(url) {
+                    try image.attr(attribute, original.absoluteString)
+                }
+            }
+        }
+        for link in try content.select("a[href]") {
+            if let url = URL(string: try link.attr("href")), let original = WeChatPublicFeedContent.originalArticleURL(url) {
+                try link.attr("href", original.absoluteString)
+            }
+        }
         let meaningfulText = try content.text().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard meaningfulText.count >= 80 else { throw WeChatHTMLPreprocessorError.missingBody }
         var result = try StaticHTMLPreprocessor.conservativeSanitize(try content.outerHtml(), baseURL: baseURL)
+        guard meaningfulText.count >= 80 || result.sanitizedHTML.contains("<img ") else { throw WeChatHTMLPreprocessorError.missingBody }
         let titleSelectors = ["#activity-name", ".rich_media_title", "meta[property=og:title]", "title"]
         for selector in titleSelectors {
             guard let element = try document.select(selector).first() else { continue }

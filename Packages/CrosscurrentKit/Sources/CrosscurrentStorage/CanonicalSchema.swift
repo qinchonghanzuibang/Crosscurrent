@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 enum CanonicalSchema {
-    static let version = 7
+    static let version = 10
 
     static func migrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -50,6 +50,36 @@ enum CanonicalSchema {
             try db.execute(sql: "ALTER TABLE item_revisions ADD COLUMN acquisition_provenance TEXT")
             try migrateWeChatEndpointSemantics(db)
             try db.execute(sql: "PRAGMA user_version = 7")
+        }
+        migrator.registerMigration("canonical-v8-wechat-acquisition") { db in
+            try db.execute(sql: "ALTER TABLE source_endpoints ADD COLUMN wechat_acquisition_json BLOB")
+            try db.execute(sql: "CREATE INDEX items_source_canonical ON items(source_id, canonical_key)")
+            // Pending PR #6 endpoint jobs must join the same source-level queue
+            // as new free endpoints. Active work is protected by its existing lease.
+            try db.execute(sql: "UPDATE jobs SET input_hash='wechat-source:' || (SELECT source_id FROM source_endpoints WHERE id=jobs.input_hash) WHERE kind='refresh' AND input_hash IN (SELECT id FROM source_endpoints WHERE connector_kind='weChatOfficialAccount')")
+            try db.execute(sql: "PRAGMA user_version = 8")
+        }
+        migrator.registerMigration("canonical-v9-wechat-article-aliases") { db in
+            try db.execute(sql: """
+                CREATE TABLE wechat_item_aliases (
+                  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE RESTRICT,
+                  alias TEXT NOT NULL,
+                  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                  PRIMARY KEY(source_id, alias)
+                ) WITHOUT ROWID, STRICT
+                """)
+            try db.execute(sql: "CREATE INDEX wechat_item_aliases_item ON wechat_item_aliases(item_id)")
+            try db.execute(sql: "PRAGMA user_version = 9")
+        }
+        migrator.registerMigration("canonical-v10-wechat-backfill") { db in
+            try db.execute(sql: """
+                CREATE TABLE wechat_item_backfills (
+                  item_id TEXT PRIMARY KEY NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                  initial_revision_id TEXT NOT NULL REFERENCES item_revisions(id) ON DELETE RESTRICT,
+                  imported_at REAL NOT NULL
+                ) STRICT
+                """)
+            try db.execute(sql: "PRAGMA user_version = 10")
         }
         return migrator
     }

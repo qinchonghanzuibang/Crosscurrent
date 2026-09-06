@@ -49,6 +49,17 @@ public actor CrosscurrentRepository {
         idempotencyKey: String? = nil
     ) throws -> Bool {
         try mutate(domains: [.sources, .endpoints, .searchInputs], idempotencyKey: idempotencyKey) { db in
+            let discoveredWeChat = endpoints.filter { $0.connector == .weChatOfficialAccount }
+            if !discoveredWeChat.isEmpty {
+                let stored = try Row.fetchAll(db, sql: "SELECT * FROM source_endpoints WHERE connector_kind='weChatOfficialAccount' AND source_id<>?", arguments: [source.id.description]).map(Self.decodeEndpoint)
+                if let winner = stored.first(where: { existing in
+                    discoveredWeChat.contains { candidate in
+                        !existing.weChatAccountAliases.isDisjoint(with: candidate.weChatAccountAliases)
+                            || (!existing.externalID.isEmpty && existing.externalID == candidate.externalID)
+                            || (existing.canonicalURL != nil && existing.canonicalURL == candidate.canonicalURL)
+                    }
+                }) { throw CrosscurrentStorageError.sourceIdentityConflict(winner.sourceID) }
+            }
             try db.execute(
                 sql: """
                 INSERT INTO sources (id, current_revision_id, kind, is_followed, is_archived, created_at)
@@ -342,6 +353,8 @@ public actor CrosscurrentRepository {
         topicNames: [String] = [],
         sanitizedHTMLBlobID: BlobID? = nil,
         evidenceBlobID: BlobID? = nil,
+        weChatIdentity: WeChatItemIdentity? = nil,
+        isInitialBackfill: Bool = false,
         idempotencyKey: String? = nil
     ) throws -> Bool {
         try mutate(domains: [.items, .searchInputs], idempotencyKey: idempotencyKey) { db in
@@ -355,6 +368,9 @@ public actor CrosscurrentRepository {
                 """,
                 arguments: [item.id.description, item.sourceID.description, item.sourceEndpointID.description, item.externalID, item.canonicalURL?.absoluteString ?? item.externalID, revision.id.description, item.remoteState.rawValue, item.createdAt.timeIntervalSince1970]
             )
+            if let weChatIdentity {
+                try Self.persistWeChatAliases(weChatIdentity, itemID: item.id, sourceID: item.sourceID, in: db)
+            }
             try db.execute(
                 sql: """
                 INSERT OR IGNORE INTO item_revisions
@@ -365,6 +381,9 @@ public actor CrosscurrentRepository {
                 """,
                 arguments: [revision.id.description, item.id.description, revision.ordinal, revision.title, revision.author, revision.publishedAt?.timeIntervalSince1970, revision.modifiedAt?.timeIntervalSince1970, revision.fetchedAt.timeIntervalSince1970, revision.languageCode, revision.text, sanitizedHTMLBlobID?.description, evidenceBlobID?.description, revision.contentHash, revision.changeKind.rawValue, revision.acquisitionProvenance?.rawValue]
             )
+            if isInitialBackfill, weChatIdentity != nil, revision.ordinal == 1 {
+                try db.execute(sql: "INSERT OR IGNORE INTO wechat_item_backfills (item_id, initial_revision_id, imported_at) VALUES (?, ?, ?)", arguments: [item.id.description, revision.id.description, revision.fetchedAt.timeIntervalSince1970])
+            }
             for (ordinal, segment) in segments.enumerated() {
                 try db.execute(
                     sql: """
@@ -894,23 +913,26 @@ public actor CrosscurrentRepository {
     /// refresh expedites a failed retry but never competes with an active lease.
     public func scheduleRefreshJob(endpointID: SourceEndpointID, payload: Data, manual: Bool, now: Date = .now) throws -> DurableJob {
         try mutateValue(domains: [.jobs]) { db in
+            let weChatSource = try String.fetchOne(db, sql: "SELECT source_id FROM source_endpoints WHERE id=? AND connector_kind='weChatOfficialAccount'", arguments: [endpointID.description])
+            let groupingKey = weChatSource.map { "wechat-source:" + $0 } ?? endpointID.description
             if let row = try Row.fetchOne(
                 db,
-                sql: "SELECT * FROM jobs WHERE kind=? AND input_hash=? AND state IN ('pending','leased','failed') ORDER BY updated_at DESC LIMIT 1",
-                arguments: ["refresh", endpointID.description]
+                sql: "SELECT * FROM jobs WHERE kind=? AND input_hash=? AND state IN ('pending','leased','failed') ORDER BY CASE state WHEN 'leased' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1",
+                arguments: ["refresh", groupingKey]
             ) {
                 var existing = try Self.decodeJob(row: row)
-                if manual, existing.state == .failed {
-                    try db.execute(sql: "UPDATE jobs SET state='pending', next_attempt_at=?, updated_at=? WHERE id=?", arguments: [now.timeIntervalSince1970, now.timeIntervalSince1970, existing.id.description])
+                if manual, existing.state != .leased {
+                    try db.execute(sql: "UPDATE jobs SET state='pending', payload=?, next_attempt_at=?, updated_at=? WHERE id=?", arguments: [payload, now.timeIntervalSince1970, now.timeIntervalSince1970, existing.id.description])
                     existing.state = .pending
+                    existing.payload = payload
                     existing.nextAttemptAt = now
                 }
                 return existing
             }
             let job = DurableJob(
                 kind: "refresh",
-                inputHash: endpointID.description,
-                idempotencyKey: "refresh:\(endpointID):\(UUID().uuidString.lowercased())",
+                inputHash: groupingKey,
+                idempotencyKey: "refresh:\(groupingKey):\(UUID().uuidString.lowercased())",
                 payload: payload,
                 nextAttemptAt: now
             )
@@ -941,7 +963,7 @@ public actor CrosscurrentRepository {
             arguments += StatementArguments(eligibleKinds.sorted())
             guard let row = try Row.fetchOne(
                 db,
-                sql: "SELECT * FROM jobs WHERE state IN ('pending','failed') AND next_attempt_at <= ? AND kind IN (\(placeholders)) ORDER BY next_attempt_at, created_at LIMIT 1",
+                sql: "SELECT * FROM jobs WHERE state IN ('pending','failed') AND next_attempt_at <= ? AND kind IN (\(placeholders)) AND NOT EXISTS (SELECT 1 FROM jobs active WHERE active.kind=jobs.kind AND active.input_hash=jobs.input_hash AND active.state='leased') ORDER BY next_attempt_at, created_at LIMIT 1",
                 arguments: arguments
             ) else { return nil }
 
@@ -974,7 +996,7 @@ public actor CrosscurrentRepository {
             try db.execute(sql: "DELETE FROM job_leases WHERE job_id=? AND expires_at <= ?", arguments: [id.description, timestamp])
             guard let row = try Row.fetchOne(
                 db,
-                sql: "SELECT * FROM jobs WHERE id=? AND state IN ('pending','failed') AND next_attempt_at <= ?",
+                sql: "SELECT * FROM jobs WHERE id=? AND state IN ('pending','failed') AND next_attempt_at <= ? AND NOT EXISTS (SELECT 1 FROM jobs active WHERE active.kind=jobs.kind AND active.input_hash=jobs.input_hash AND active.state='leased')",
                 arguments: [id.description, timestamp]
             ) else { return nil }
 
@@ -1539,9 +1561,11 @@ public actor CrosscurrentRepository {
                     db,
                     sql: """
                     SELECT MAX(CASE
+                      WHEN EXISTS (SELECT 1 FROM wechat_item_backfills wb WHERE wb.item_id=ir.item_id
+                        AND (wb.initial_revision_id=ir.id OR ir.modified_at IS NULL OR ir.modified_at<=wb.imported_at)) THEN NULL
                       WHEN ir.revision_reason='initial' OR ir.ordinal=1 THEN ir.published_at
                       WHEN ir.revision_reason IN ('contentUpdate','majorUpdate','correction')
-                        THEN COALESCE(ir.modified_at, ir.published_at, ir.fetched_at)
+                        THEN CASE WHEN EXISTS (SELECT 1 FROM items wi JOIN source_endpoints we ON we.id=wi.endpoint_id WHERE wi.id=ir.item_id AND we.connector_kind='weChatOfficialAccount') THEN COALESCE(ir.modified_at, ir.published_at) ELSE COALESCE(ir.modified_at, ir.published_at, ir.fetched_at) END
                       ELSE NULL END)
                     FROM event_revision_memberships rm
                     JOIN event_membership_assertions m ON m.id=rm.membership_assertion_id
@@ -1920,6 +1944,106 @@ public actor CrosscurrentRepository {
         }
     }
 
+    /// Public feeds and the optional index share one Item lineage. Stable article
+    /// coordinates bridge PR #6's ghid identities and newer biz-first aliases.
+    public func weChatItemState(sourceID: SourceID, externalID: String, canonicalURL: URL?, originalURL: URL? = nil) throws -> StoredWeChatItemState? {
+        try database.pool.read { db in
+            let aliases = Self.weChatAliasKeys(.init(externalID: externalID, canonicalURL: canonicalURL, originalURL: originalURL))
+            let placeholders = Array(repeating: "?", count: aliases.count).joined(separator: ",")
+            let aliasedItemID = try String.fetchOne(db,
+                sql: "SELECT item_id FROM wechat_item_aliases WHERE source_id=? AND alias IN (\(placeholders)) ORDER BY alias LIMIT 1",
+                arguments: StatementArguments([sourceID.description] + aliases))
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT i.id AS item_id, i.endpoint_id, i.connector_external_id, i.canonical_key,
+                       i.current_revision_id, r.ordinal, r.content_hash, r.sanitized_html_blob_id
+                FROM items i JOIN item_revisions r ON r.id=i.current_revision_id
+                JOIN source_endpoints e ON e.id=i.endpoint_id
+                WHERE i.source_id=? AND e.connector_kind='weChatOfficialAccount'
+                ORDER BY i.created_at, i.id
+                """, arguments: [sourceID.description])
+            let coordinates = Self.weChatArticleCoordinates(externalID: externalID, url: canonicalURL)
+            let matched = rows.first { row in
+                if let aliasedItemID { return (row["item_id"] as String) == aliasedItemID }
+                let existingID: String = row["connector_external_id"]
+                let existingURL = URL(string: row["canonical_key"] as String)
+                if existingID == externalID { return true }
+                if let canonicalURL, existingURL == canonicalURL { return true }
+                if let originalURL, existingURL == originalURL { return true }
+                let incomingBiz = canonicalURL.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "__biz" })?.value }
+                let storedBiz = existingURL.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "__biz" })?.value }
+                // A migrated publisher may reuse article coordinates under a new
+                // biz. Equal mid/idx alone cannot merge two explicitly different accounts.
+                if let incomingBiz, let storedBiz, incomingBiz != storedBiz { return false }
+                return !coordinates.isEmpty && !coordinates.isDisjoint(with: Self.weChatArticleCoordinates(externalID: existingID, url: existingURL))
+            }
+            guard let row = matched else { return nil }
+            guard let itemID = Self.identifier(ItemID.self, row["item_id"]),
+                  let revisionID = Self.identifier(ItemRevisionID.self, row["current_revision_id"]),
+                  let endpointID = Self.identifier(SourceEndpointID.self, row["endpoint_id"])
+            else { throw CrosscurrentStorageError.corruptRecord("WeChatItem") }
+            return StoredWeChatItemState(
+                item: StoredItemState(itemID: itemID, currentRevisionID: revisionID, currentOrdinal: row["ordinal"], currentContentHash: row["content_hash"]),
+                endpointID: endpointID, externalID: row["connector_external_id"],
+                hasStoredArticleHTML: (row["sanitized_html_blob_id"] as String?) != nil
+            )
+        }
+    }
+
+    /// A short public URL may resolve only on a later refresh. Retain that new
+    /// equivalence even when cached full content makes another fetch unnecessary.
+    @discardableResult
+    public func recordWeChatItemAliases(itemID: ItemID, sourceID: SourceID, externalID: String, canonicalURL: URL?, originalURL: URL? = nil) throws -> Bool {
+        let identity = WeChatItemIdentity(externalID: externalID, canonicalURL: canonicalURL, originalURL: originalURL)
+        let aliases = Self.weChatAliasKeys(identity)
+        let placeholders = Array(repeating: "?", count: aliases.count).joined(separator: ",")
+        let count = try database.pool.read { db in
+            try Int.fetchOne(db,
+                sql: "SELECT COUNT(*) FROM wechat_item_aliases WHERE source_id=? AND item_id=? AND alias IN (\(placeholders))",
+                arguments: StatementArguments([sourceID.description, itemID.description] + aliases)) ?? 0
+        }
+        guard count < aliases.count else { return false }
+        return try mutate(domains: [.items]) { db in
+            try Self.persistWeChatAliases(identity, itemID: itemID, sourceID: sourceID, in: db)
+        }
+    }
+
+    private static func weChatAliasKeys(_ identity: WeChatItemIdentity) -> [String] {
+        var aliases: Set<String> = ["id:" + identity.externalID]
+        for url in [identity.canonicalURL, identity.originalURL].compactMap({ $0 })
+        where url.host?.lowercased() == "mp.weixin.qq.com" && url.user == nil && url.password == nil {
+            aliases.insert("url:" + url.absoluteString)
+        }
+        return aliases.sorted()
+    }
+
+    private static func persistWeChatAliases(_ identity: WeChatItemIdentity, itemID: ItemID, sourceID: SourceID, in db: Database) throws {
+        let valid = try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM items i JOIN source_endpoints e ON e.id=i.endpoint_id WHERE i.id=? AND i.source_id=? AND e.connector_kind='weChatOfficialAccount')", arguments: [itemID.description, sourceID.description]) ?? false
+        guard valid else { throw CrosscurrentStorageError.corruptRecord("WeChat article alias owner") }
+        for alias in weChatAliasKeys(identity) {
+            // Append-only equivalences never reassign another Item's evidence.
+            try db.execute(sql: "INSERT OR IGNORE INTO wechat_item_aliases (source_id, alias, item_id) VALUES (?, ?, ?)", arguments: [sourceID.description, alias, itemID.description])
+        }
+    }
+
+    private static func weChatArticleCoordinates(externalID: String, url: URL?) -> Set<String> {
+        var keys: Set<String> = []
+        let components = externalID.split(separator: ":", omittingEmptySubsequences: false)
+        if components.count >= 4, components.first == "wechat-article" {
+            let qualifier = String(components[components.count - 2])
+            let value = String(components[components.count - 1])
+            if qualifier == "sn" || qualifier == "url" { keys.insert(qualifier + ":" + value) }
+            else if Int(qualifier) != nil, Int(value) != nil { keys.insert("mid:" + qualifier + ":" + value) }
+        }
+        if let url, url.host?.lowercased() == "mp.weixin.qq.com",
+           let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            let mid = query.first { ["mid", "appmsgid"].contains($0.name.lowercased()) }?.value
+            let idx = query.first { ["idx", "position"].contains($0.name.lowercased()) }?.value
+            if let mid, let idx, Int(mid) != nil, Int(idx) != nil { keys.insert("mid:" + mid + ":" + idx) }
+            if let sn = query.first(where: { $0.name.lowercased() == "sn" })?.value, !sn.isEmpty { keys.insert("sn:" + sn.lowercased()) }
+        }
+        return keys
+    }
+
     public func itemSegments(revisionID: ItemRevisionID) throws -> [ItemSegment] {
         try database.pool.read { db in
             try Row.fetchAll(
@@ -2037,26 +2161,59 @@ public actor CrosscurrentRepository {
 
     public func sourceEndpoint(id: SourceEndpointID) throws -> SourceEndpoint? {
         try database.pool.read { db in
-            guard let row = try Row.fetchOne(db, sql: "SELECT * FROM source_endpoints WHERE id=?", arguments: [id.description]) else { return nil }
-            guard
-                let sourceID = Self.identifier(SourceID.self, row["source_id"]),
-                let connector = ConnectorKind(rawValue: row["connector_kind"]),
-                let access = AccessRequirement(rawValue: row["access_requirement"]),
-                let privacy = ContentPrivacy(rawValue: row["content_privacy"]),
-                let health = ConnectorHealth(rawValue: row["health"])
-            else { throw CrosscurrentStorageError.corruptRecord("SourceEndpoint") }
-            return SourceEndpoint(
-                id: id,
-                sourceID: sourceID,
-                connector: connector,
-                accountID: Self.identifier(ConnectorAccountID.self, row["account_id"] as String?),
-                externalID: row["external_id"],
-                canonicalURL: (row["canonical_url"] as String?).flatMap(URL.init(string:)),
-                accessRequirement: access,
-                contentPrivacy: privacy,
-                health: health,
-                lastSuccessfulSync: (row["last_successful_sync"] as Double?).map(Date.init(timeIntervalSince1970:))
-            )
+            try Row.fetchOne(db, sql: "SELECT * FROM source_endpoints WHERE id=?", arguments: [id.description]).map(Self.decodeEndpoint)
+        }
+    }
+
+    public func sourceEndpoints(sourceID: SourceID) throws -> [SourceEndpoint] {
+        try database.pool.read { db in
+            try Row.fetchAll(db, sql: "SELECT * FROM source_endpoints WHERE source_id=? ORDER BY external_id", arguments: [sourceID.description]).map(Self.decodeEndpoint)
+        }
+    }
+
+    /// Attaches only qualified account aliases to an existing publisher. This
+    /// changes endpoint state without replacing Source or any evidence revision.
+    @discardableResult
+    public func attachWeChatEndpoints(_ endpoints: [SourceEndpoint], to sourceID: SourceID) throws -> Bool {
+        guard !endpoints.isEmpty else { return false }
+        return try mutate(domains: [.sources, .endpoints]) { db in
+            var existing = try Row.fetchAll(db, sql: "SELECT * FROM source_endpoints WHERE source_id=?", arguments: [sourceID.description]).map(Self.decodeEndpoint)
+            for proposed in endpoints where proposed.connector == .weChatOfficialAccount {
+                let aliases = existing.reduce(into: Set<String>()) { $0.formUnion($1.weChatAccountAliases) }
+                let sameLocator = existing.first { $0.connector == .weChatOfficialAccount && $0.canonicalURL != nil && $0.canonicalURL == proposed.canonicalURL }
+                guard !aliases.isDisjoint(with: proposed.weChatAccountAliases) || sameLocator != nil else { continue }
+                var endpoint = proposed
+                endpoint.sourceID = sourceID
+                if let retained = sameLocator ?? existing.first(where: { $0.connector == proposed.connector && $0.externalID == proposed.externalID }) {
+                    endpoint.id = retained.id
+                    // Discovery does not reset persisted validators, retry state or
+                    // successful sync; it may enrich the stable alias set.
+                    endpoint.lastSuccessfulSync = retained.lastSuccessfulSync
+                    endpoint.health = retained.health
+                    if var metadata = retained.weChatAcquisition ?? proposed.weChatAcquisition {
+                        metadata.accountAliases = Array(retained.weChatAccountAliases.union(proposed.weChatAccountAliases)).sorted()
+                        metadata.lastCatalogCheck = [metadata.lastCatalogCheck, proposed.weChatAcquisition?.lastCatalogCheck].compactMap { $0 }.max()
+                        endpoint.weChatAcquisition = metadata
+                    }
+                    existing.removeAll { $0.id == retained.id }
+                }
+                try Self.persist(endpoint: endpoint, in: db)
+                existing.append(endpoint)
+            }
+        }
+    }
+
+    /// Persist a source refresh as one short transaction after acquisition has
+    /// completed outside SQLite. Endpoint health remains independent per provider.
+    @discardableResult
+    public func finishWeChatSync(endpoints: [SourceEndpoint], itemCount: Int, startedAt: Date, completedAt: Date = .now) throws -> Bool {
+        try mutate(domains: [.endpoints, .jobs]) { db in
+            for endpoint in endpoints {
+                try Self.persist(endpoint: endpoint, in: db)
+                guard let attempt = endpoint.weChatAcquisition?.lastAttempt, attempt >= startedAt else { continue }
+                try db.execute(sql: "INSERT INTO sync_runs (id, endpoint_id, started_at, completed_at, result, item_count, error_class, checkpoint) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)", arguments: [UUID().uuidString.lowercased(), endpoint.id.description, attempt.timeIntervalSince1970, completedAt.timeIntervalSince1970, endpoint.health.rawValue, itemCount, endpoint.health == .healthy ? nil : "publicAcquisition"])
+                try db.execute(sql: "INSERT INTO connector_health_events (id, endpoint_id, health, message, observed_at) VALUES (?, ?, ?, NULL, ?)", arguments: [UUID().uuidString.lowercased(), endpoint.id.description, endpoint.health.rawValue, completedAt.timeIntervalSince1970])
+            }
         }
     }
 
@@ -2070,7 +2227,7 @@ public actor CrosscurrentRepository {
                         WHERE h.endpoint_id=e.id AND h.health != 'healthy'
                         ORDER BY h.observed_at DESC LIMIT 1) AS failure_message,
                        (SELECT MIN(j.next_attempt_at) FROM jobs j
-                        WHERE j.kind='refresh' AND j.input_hash=e.id AND j.state IN ('pending','failed')) AS next_retry,
+                        WHERE j.kind='refresh' AND (j.input_hash=e.id OR j.input_hash='wechat-source:' || e.source_id) AND j.state IN ('pending','failed')) AS next_retry,
                        (SELECT cursor_family FROM sync_cursors c WHERE c.endpoint_id=e.id) AS cursor_family,
                        (SELECT COUNT(*) FROM items i WHERE i.endpoint_id=e.id) AS item_count
                 FROM source_endpoints e
@@ -2099,11 +2256,13 @@ public actor CrosscurrentRepository {
         try database.pool.read { db -> StoredItemDetail? in
             let row = try Row.fetchOne(db, sql: """
                 SELECT i.id, i.current_revision_id, i.canonical_key, ir.id AS revision_id,
-                       ir.title, ir.author, ir.plain_text, ir.published_at, sr.display_name, ep.account_id
+                       ir.title, ir.author, ir.plain_text, ir.published_at, sr.display_name, ep.account_id,
+                       b.sha256 AS html_sha256, b.relative_path AS html_relative_path, b.byte_count AS html_byte_count
                 FROM items i
                 JOIN item_revisions ir ON ir.item_id=i.id
                 JOIN source_endpoints ep ON ep.id=i.endpoint_id
                 JOIN source_revisions sr ON sr.id=(SELECT current_revision_id FROM sources WHERE id=i.source_id)
+                LEFT JOIN blobs b ON b.id=ir.sanitized_html_blob_id
                 WHERE i.id=? AND ir.id=COALESCE(?, i.current_revision_id)
                 LIMIT 1
                 """, arguments: [itemID.description, revisionID])
@@ -2113,6 +2272,17 @@ public actor CrosscurrentRepository {
             else { return nil }
             let currentRevision: String = row["current_revision_id"]
             let canonical: String = row["canonical_key"]
+            let sanitizedHTML: String? = {
+                guard let relativePath = row["html_relative_path"] as String?,
+                      let expectedHash = row["html_sha256"] as String?,
+                      let expectedCount = row["html_byte_count"] as Int?
+                else { return nil }
+                let url = database.locations.blobs.appending(path: relativePath)
+                guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
+                      data.count == expectedCount, HTTPMetadataRedactor.digest(data) == expectedHash
+                else { return nil }
+                return String(data: data, encoding: .utf8)
+            }()
             return StoredItemDetail(
                 id: resolvedItemID,
                 revisionID: resolvedRevisionID,
@@ -2120,6 +2290,7 @@ public actor CrosscurrentRepository {
                 author: row["author"],
                 sourceName: row["display_name"],
                 text: row["plain_text"],
+                sanitizedHTML: sanitizedHTML,
                 canonicalURL: URL(string: canonical).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
                 originalAccountID: Self.identifier(ConnectorAccountID.self, row["account_id"] as String?),
                 publishedAt: (row["published_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
@@ -2305,14 +2476,14 @@ public actor CrosscurrentRepository {
             sql: """
             INSERT INTO source_endpoints
               (id, source_id, connector_kind, account_id, external_id, canonical_url, access_requirement,
-               content_privacy, health, capabilities_json, refresh_policy_json, last_successful_sync)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+               content_privacy, health, capabilities_json, refresh_policy_json, last_successful_sync, wechat_acquisition_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
             ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id, account_id=excluded.account_id,
               canonical_url=excluded.canonical_url, access_requirement=excluded.access_requirement,
               content_privacy=excluded.content_privacy, health=excluded.health,
-              last_successful_sync=excluded.last_successful_sync
+              last_successful_sync=excluded.last_successful_sync, wechat_acquisition_json=excluded.wechat_acquisition_json
             """,
-            arguments: [endpoint.id.description, endpoint.sourceID.description, endpoint.connector.rawValue, endpoint.accountID?.description, endpoint.externalID, endpoint.canonicalURL?.absoluteString, endpoint.accessRequirement.rawValue, endpoint.contentPrivacy.rawValue, endpoint.health.rawValue, endpoint.lastSuccessfulSync?.timeIntervalSince1970]
+            arguments: [endpoint.id.description, endpoint.sourceID.description, endpoint.connector.rawValue, endpoint.accountID?.description, endpoint.externalID, endpoint.canonicalURL?.absoluteString, endpoint.accessRequirement.rawValue, endpoint.contentPrivacy.rawValue, endpoint.health.rawValue, endpoint.lastSuccessfulSync?.timeIntervalSince1970, try endpoint.weChatAcquisition.map { try JSONEncoder().encode($0) }]
         )
     }
 
@@ -2325,7 +2496,7 @@ public actor CrosscurrentRepository {
             let privacy = ContentPrivacy(rawValue: row["content_privacy"]),
             let health = ConnectorHealth(rawValue: row["health"])
         else { throw CrosscurrentStorageError.corruptRecord("SourceEndpoint") }
-        return SourceEndpoint(id: id, sourceID: sourceID, connector: connector, accountID: identifier(ConnectorAccountID.self, row["account_id"] as String?), externalID: row["external_id"], canonicalURL: (row["canonical_url"] as String?).flatMap(URL.init(string:)), accessRequirement: access, contentPrivacy: privacy, health: health, lastSuccessfulSync: (row["last_successful_sync"] as Double?).map(Date.init(timeIntervalSince1970:)))
+        return SourceEndpoint(id: id, sourceID: sourceID, connector: connector, accountID: identifier(ConnectorAccountID.self, row["account_id"] as String?), externalID: row["external_id"], canonicalURL: (row["canonical_url"] as String?).flatMap(URL.init(string:)), accessRequirement: access, contentPrivacy: privacy, health: health, lastSuccessfulSync: (row["last_successful_sync"] as Double?).map(Date.init(timeIntervalSince1970:)), weChatAcquisition: try (row["wechat_acquisition_json"] as Data?).map { try JSONDecoder().decode(WeChatAcquisitionMetadata.self, from: $0) })
     }
 
     private static func upsertSearchInput(stableID: String, kind: String, revisionID: String?, languageCode: String?, title: String, body: String, inputHash: String, db: Database) throws {

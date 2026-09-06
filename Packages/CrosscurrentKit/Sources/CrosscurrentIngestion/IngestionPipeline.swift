@@ -32,9 +32,15 @@ public actor IngestionPipeline {
     }
 
     public func ingest(candidate: ConnectorItemCandidate, sourceID: SourceID, endpointID: SourceEndpointID, fetchedAt: Date = .now) async throws -> IngestionResult {
-        let existing = try await repository.itemState(endpointID: endpointID, externalID: candidate.externalID)
+        let isWeChat = try await repository.sourceEndpoint(id: endpointID)?.connector == .weChatOfficialAccount
+        let canonicalURL = candidate.canonicalURL.map { isWeChat ? WeChatArticleIdentity.canonicalize($0) : URLNormalizer.canonicalize($0) }
+        let originalURL = candidate.weChatOriginalURL.map(WeChatArticleIdentity.canonicalize)
+        let weChatIdentity = isWeChat ? WeChatItemIdentity(externalID: candidate.externalID, canonicalURL: canonicalURL, originalURL: originalURL) : nil
+        let weChatState = isWeChat ? try await repository.weChatItemState(sourceID: sourceID, externalID: candidate.externalID, canonicalURL: canonicalURL, originalURL: originalURL) : nil
+        let existing: StoredItemState?
+        if let weChatState { existing = weChatState.item }
+        else { existing = try await repository.itemState(endpointID: endpointID, externalID: candidate.externalID) }
         let itemID = existing?.itemID ?? ItemID()
-        let canonicalURL = candidate.canonicalURL.map(URLNormalizer.canonicalize)
         let normalizedText = normalizeText(candidate.contentText ?? candidate.summary ?? candidate.title)
         let hashInput = [candidate.title, candidate.author ?? "", normalizedText].joined(separator: "\n")
         let contentHash = SHA256.hash(data: Data(hashInput.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -42,8 +48,8 @@ public actor IngestionPipeline {
         let item = Item(
             id: itemID,
             sourceID: sourceID,
-            sourceEndpointID: endpointID,
-            externalID: candidate.externalID,
+            sourceEndpointID: weChatState?.endpointID ?? endpointID,
+            externalID: weChatState?.externalID ?? candidate.externalID,
             canonicalURL: canonicalURL,
             currentRevisionID: revisionID,
             remoteState: candidate.deletionState
@@ -95,7 +101,11 @@ public actor IngestionPipeline {
                 segments: segments,
                 topicNames: candidate.topicNames,
                 sanitizedHTMLBlobID: htmlBlob?.id,
-                idempotencyKey: "item:\(endpointID):\(candidate.externalID):\(contentHash)"
+                weChatIdentity: weChatIdentity,
+                isInitialBackfill: candidate.isInitialBackfill == true,
+                idempotencyKey: isWeChat
+                    ? "item:\(itemID):\(contentHash)"
+                    : "item:\(endpointID):\(candidate.externalID):\(contentHash)"
             )
             if createdRevision {
                 try await enrichment.enrich(
@@ -106,6 +116,8 @@ public actor IngestionPipeline {
                 )
             }
             revision = value
+        } else if isWeChat {
+            _ = try await repository.recordWeChatItemAliases(itemID: itemID, sourceID: sourceID, externalID: candidate.externalID, canonicalURL: canonicalURL, originalURL: originalURL)
         }
 
         let metrics = candidate.metricSnapshots.map {
