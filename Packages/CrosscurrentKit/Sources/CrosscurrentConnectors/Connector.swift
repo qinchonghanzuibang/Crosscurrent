@@ -100,8 +100,10 @@ public struct ConnectorItemCandidate: Codable, Hashable, Sendable {
     public var metricSnapshots: [ConnectorMetric]
     public var deletionState: RemoteItemState
     public var acquisitionProvenance: ContentAcquisitionProvenance?
+    public var weChatOriginalURL: URL?
+    public var isInitialBackfill: Bool?
 
-    public init(externalID: String, canonicalURL: URL? = nil, title: String, author: String? = nil, publishedAt: Date? = nil, modifiedAt: Date? = nil, summary: String? = nil, contentHTML: String? = nil, contentText: String? = nil, languageCode: String? = nil, topicNames: [String] = [], metricSnapshots: [ConnectorMetric] = [], deletionState: RemoteItemState = .available, acquisitionProvenance: ContentAcquisitionProvenance? = nil) {
+    public init(externalID: String, canonicalURL: URL? = nil, title: String, author: String? = nil, publishedAt: Date? = nil, modifiedAt: Date? = nil, summary: String? = nil, contentHTML: String? = nil, contentText: String? = nil, languageCode: String? = nil, topicNames: [String] = [], metricSnapshots: [ConnectorMetric] = [], deletionState: RemoteItemState = .available, acquisitionProvenance: ContentAcquisitionProvenance? = nil, weChatOriginalURL: URL? = nil, isInitialBackfill: Bool? = nil) {
         self.externalID = externalID
         self.canonicalURL = canonicalURL
         self.title = title
@@ -116,6 +118,8 @@ public struct ConnectorItemCandidate: Codable, Hashable, Sendable {
         self.metricSnapshots = metricSnapshots
         self.deletionState = deletionState
         self.acquisitionProvenance = acquisitionProvenance
+        self.weChatOriginalURL = weChatOriginalURL
+        self.isInitialBackfill = isInitialBackfill
     }
 }
 

@@ -73,6 +73,36 @@ public struct SourceRevision: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+/// Local acquisition state. Account aliases identify the publisher; provider/feed
+/// locators only identify ways of acquiring that publisher's public articles.
+public struct WeChatAcquisitionMetadata: Codable, Hashable, Sendable {
+    public var providerID: String
+    public var priority: Int
+    public var accountAliases: [String]
+    public var currentBiz: String?
+    public var displayName: String?
+    public var lastAttempt: Date?
+    public var etag: String?
+    public var lastModified: String?
+    public var lastAudit: Date?
+    public var lastCatalogCheck: Date?
+    public var retryAfter: Date?
+
+    public init(providerID: String, priority: Int, accountAliases: [String] = [], currentBiz: String? = nil, displayName: String? = nil, lastAttempt: Date? = nil, etag: String? = nil, lastModified: String? = nil, lastAudit: Date? = nil, lastCatalogCheck: Date? = nil, retryAfter: Date? = nil) {
+        self.providerID = providerID
+        self.priority = priority
+        self.accountAliases = Array(Set(accountAliases)).sorted()
+        self.currentBiz = currentBiz
+        self.displayName = displayName
+        self.lastAttempt = lastAttempt
+        self.etag = etag
+        self.lastModified = lastModified
+        self.lastAudit = lastAudit
+        self.lastCatalogCheck = lastCatalogCheck
+        self.retryAfter = retryAfter
+    }
+}
+
 public struct SourceEndpoint: Identifiable, Codable, Hashable, Sendable {
     public var id: SourceEndpointID
     public var sourceID: SourceID
@@ -84,12 +114,14 @@ public struct SourceEndpoint: Identifiable, Codable, Hashable, Sendable {
     public var contentPrivacy: ContentPrivacy
     public var health: ConnectorHealth
     public var lastSuccessfulSync: Date?
+    public var weChatAcquisition: WeChatAcquisitionMetadata?
 
     public init(
         id: SourceEndpointID = SourceEndpointID(), sourceID: SourceID, connector: ConnectorKind,
         accountID: ConnectorAccountID? = nil, externalID: String, canonicalURL: URL? = nil,
         accessRequirement: AccessRequirement = .anonymous, contentPrivacy: ContentPrivacy = .unknown,
-        health: ConnectorHealth = .healthy, lastSuccessfulSync: Date? = nil
+        health: ConnectorHealth = .healthy, lastSuccessfulSync: Date? = nil,
+        weChatAcquisition: WeChatAcquisitionMetadata? = nil
     ) {
         self.id = id
         self.sourceID = sourceID
@@ -101,6 +133,24 @@ public struct SourceEndpoint: Identifiable, Codable, Hashable, Sendable {
         self.contentPrivacy = contentPrivacy
         self.health = health
         self.lastSuccessfulSync = lastSuccessfulSync
+        self.weChatAcquisition = weChatAcquisition
+    }
+
+    /// Also reads PR #6 endpoints, whose biz was retained on the official profile
+    /// URL before acquisition metadata existed. Display names never enter identity.
+    public var weChatAccountAliases: Set<String> {
+        guard connector == .weChatOfficialAccount else { return [] }
+        var aliases = Set(weChatAcquisition?.accountAliases ?? [])
+        let accountID = externalID.components(separatedBy: ":feed:").first ?? externalID
+        if ["wechat-account:", "wechat-account-biz:", "wechat-account-wxid:"].contains(where: accountID.hasPrefix) {
+            aliases.insert(accountID)
+        }
+        if let url = canonicalURL, url.host?.lowercased() == "mp.weixin.qq.com",
+           let biz = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { ["__biz", "biz"].contains($0.name) })?.value,
+           !biz.isEmpty {
+            aliases.insert("wechat-account-biz:\(biz)")
+        }
+        return aliases
     }
 }
 

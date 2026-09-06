@@ -5,6 +5,8 @@ public enum RemoteItemState: String, Codable, CaseIterable, Sendable {
 }
 public enum ContentAcquisitionProvenance: String, Codable, CaseIterable, Sendable {
     case officialHTTP
+    case wechat2rssPublicFeed
+    case bestBlogsWechat2RSS
     case providerFallback
     case connectorPayload
 }

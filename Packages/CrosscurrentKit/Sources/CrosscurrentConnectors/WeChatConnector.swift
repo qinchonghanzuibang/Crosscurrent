@@ -5,7 +5,7 @@ import SwiftSoup
 
 public enum WeChatArticleIdentity {
     public static func externalID(account: WeChatAccountIdentity, post: WeChatPostCandidate) -> String {
-        let accountID = account.ghid?.lowercased() ?? account.wxid?.lowercased() ?? account.biz ?? "unknown"
+        let accountID = account.biz ?? account.ghid?.lowercased() ?? account.wxid?.lowercased() ?? "unknown"
         if let appmsgid = nonempty(post.appmsgid), let position = post.position {
             return "wechat-article:\(accountID):\(appmsgid):\(position)"
         }
@@ -26,6 +26,7 @@ public enum WeChatArticleIdentity {
             "chksm", "scene", "sessionid", "subscene", "clicktime", "enterid", "ascene", "devicetype",
             "version", "nettype", "lang", "exportkey", "pass_ticket", "wx_header", "mpshare", "from",
             "isappinstalled", "sharer_shareinfo", "sharer_shareinfo_first", "source", "timestamp",
+            "token", "access_token", "api_key", "apikey", "password", "secret", "authorization", "rss_token",
         ]
         components.queryItems = components.queryItems?
             .filter { !volatile.contains($0.name.lowercased()) && !$0.name.lowercased().hasPrefix("utm_") }
@@ -75,6 +76,8 @@ public actor URLSessionWeChatOfficialArticleLoader: WeChatOfficialArticleLoading
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieAcceptPolicy = .never
         configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
         configuration.urlCache = nil
         configuration.timeoutIntervalForRequest = 30
         session = URLSession(configuration: configuration, delegate: WeChatRedirectDelegate(), delegateQueue: nil)
@@ -84,6 +87,7 @@ public actor URLSessionWeChatOfficialArticleLoader: WeChatOfficialArticleLoading
         guard WeChatArticleValidator.isAllowedArticleURL(url) else { throw ConnectorError.unsupportedInput }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        request.httpShouldHandleCookies = false
         request.timeoutInterval = 30
         request.setValue("text/html,application/xhtml+xml;q=0.9", forHTTPHeaderField: "Accept")
         request.setValue("zh-CN,zh;q=0.9,en;q=0.7", forHTTPHeaderField: "Accept-Language")
@@ -107,7 +111,8 @@ public enum WeChatArticleValidator {
     public static func isAllowedArticleURL(_ url: URL) -> Bool {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.user == nil, url.password == nil else { return false }
         let host = url.host?.lowercased() ?? ""
-        return host == "mp.weixin.qq.com" || host.hasSuffix(".weixin.qq.com")
+        return host == "mp.weixin.qq.com" && (url.port == nil || url.port == 443 || url.port == 80)
+            && (url.path == "/s" || url.path.hasPrefix("/s/"))
     }
 
     public static func assess(_ response: WeChatOfficialArticleResponse) -> WeChatArticleAssessment {
@@ -170,6 +175,11 @@ public actor WeChatArticleFetcher {
             // Public HTTP failure falls through to the provider; it never requests browser authentication.
         }
 
+        if [.wechat2rssPublicFeed, .bestBlogsWechat2RSS].contains(candidate.acquisitionProvenance),
+           let html = candidate.contentHTML, WeChatPublicFeedContent.isComplete(html) {
+            return candidate
+        }
+
         do {
             if let article = try await provider.fetchArticleHTML(articleURL: url) {
                 switch WeChatArticleValidator.assessProviderHTML(article.html) {
@@ -208,37 +218,51 @@ public actor WeChatConnector: QueryDiscoveringConnector {
         var accumulated: Int
     }
 
-    private let provider: any WeChatIndexProvider
-    private let official: any WeChatOfficialArticleLoading
+    let provider: any WeChatIndexProvider
+    let official: any WeChatOfficialArticleLoading
     private let articleFetcher: WeChatArticleFetcher
-    private let refreshTTL: TimeInterval
-    private let initialBackfillLimit: Int
+    let refreshTTL: TimeInterval
+    let initialBackfillLimit: Int
+    let catalogs: [any WeChatPublicFeedCatalog]
+    let publicHTTP: any ConnectorHTTPClient
+    var qualifiedFeeds: [URL: WeChatQualifiedPublicFeed] = [:]
 
     public init(
         provider: any WeChatIndexProvider,
         official: any WeChatOfficialArticleLoading = URLSessionWeChatOfficialArticleLoader(),
+        catalogs: [any WeChatPublicFeedCatalog] = [],
+        publicHTTP: any ConnectorHTTPClient = AnonymousPublicWeChatHTTPClient(),
         refreshTTL: TimeInterval = 4 * 60 * 60,
         initialBackfillLimit: Int = 25
     ) {
         self.provider = provider
         self.official = official
+        self.catalogs = catalogs
+        self.publicHTTP = publicHTTP
         articleFetcher = WeChatArticleFetcher(official: official, provider: provider)
         self.refreshTTL = max(5 * 60, refreshTTL)
         self.initialBackfillLimit = max(20, min(30, initialBackfillLimit))
     }
 
-    public func search(query: String, context _: ConnectorContext) async throws -> [ConnectorDiscoveryResult] {
+    public func search(query: String, context: ConnectorContext) async throws -> [ConnectorDiscoveryResult] {
+        try await searchPublicCatalogs(query: query, context: context)
+    }
+
+    public func searchMore(query: String, context _: ConnectorContext) async throws -> [ConnectorDiscoveryResult] {
         try await provider.searchAccounts(query: query).compactMap { try Self.discoveryResult(for: $0) }
     }
 
-    public func discover(input: ConnectorDiscoveryInput, context _: ConnectorContext) async throws -> ConnectorDiscoveryResult {
+    public func discover(input: ConnectorDiscoveryInput, context: ConnectorContext) async throws -> ConnectorDiscoveryResult {
+        if let catalog = WeChatCatalogID.allCases.first(where: { $0.accepts(feedURL: input.url) }) {
+            return try await publicFeedDiscovery(url: input.url, catalog: catalog, context: context)
+        }
         guard WeChatArticleValidator.isAllowedArticleURL(input.url) else { throw ConnectorError.unsupportedInput }
         var resolved: WeChatAccountIdentity?
         if let response = try? await official.fetch(input.url),
            case let .article(html) = WeChatArticleValidator.assess(response) {
             resolved = Self.publicIdentity(from: html, articleURL: response.finalURL)
         }
-        if resolved?.stableExternalID == nil || resolved?.ghid == nil {
+        if resolved?.stableExternalID == nil {
             let providerIdentity = try await provider.resolveAccount(articleURL: input.url)
             resolved = Self.merging(resolved, with: providerIdentity)
         }
@@ -253,6 +277,12 @@ public actor WeChatConnector: QueryDiscoveringConnector {
     }
 
     public func refresh(endpoint: SourceEndpoint, cursor: ConnectorCursor?, context: ConnectorContext) async throws -> ConnectorRefreshPage {
+        if endpoint.weChatAcquisition?.providerID != nil,
+           WeChatCatalogID(rawValue: endpoint.weChatAcquisition!.providerID) != nil {
+            let result = await refreshSource(endpoints: [endpoint], context: context, manual: false)
+            guard result.succeeded else { throw ConnectorError.temporarilyUnavailable }
+            return ConnectorRefreshPage(candidates: result.candidates, reachedEnd: true, performedRemoteRequest: result.performedRemoteRequest)
+        }
         var account = Self.account(from: endpoint)
         if endpoint.lastSuccessfulSync == nil || cursor?.family == "wechat-initial-history-v1" {
             let state = try cursor?.decode(InitialHistoryCursor.self)
@@ -284,7 +314,8 @@ public actor WeChatConnector: QueryDiscoveringConnector {
     }
 
     public func healthCheck(accountID _: ConnectorAccountID?) async -> ConnectorHealth {
-        switch await provider.healthCheck() {
+        if !catalogs.isEmpty { return .healthy }
+        return switch await provider.healthCheck() {
         case .configured: .healthy
         case .missingConfiguration: .configurationRequired
         case .quotaExhausted: .configurationRequired
@@ -294,8 +325,8 @@ public actor WeChatConnector: QueryDiscoveringConnector {
 
     public func disconnect(accountID _: ConnectorAccountID) async throws {}
 
-    private static func discoveryResult(for account: WeChatAccountIdentity) throws -> ConnectorDiscoveryResult? {
-        guard let externalID = account.stableExternalID, account.ghid != nil else { return nil }
+    static func discoveryResult(for account: WeChatAccountIdentity) throws -> ConnectorDiscoveryResult? {
+        guard let externalID = account.stableExternalID else { return nil }
         let revisionID = SourceRevisionID()
         let source = LogicalSource(currentRevisionID: revisionID, kind: .organization)
         let revision = SourceRevision(
@@ -313,7 +344,8 @@ public actor WeChatConnector: QueryDiscoveringConnector {
             externalID: externalID,
             canonicalURL: profileURL(biz: account.biz),
             accessRequirement: .anonymous,
-            contentPrivacy: .public
+            contentPrivacy: .public,
+            weChatAcquisition: .init(providerID: "jizhila", priority: 2, accountAliases: account.accountAliases, displayName: account.displayName)
         )
         let detail = [account.verification, account.owner, account.description]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -332,7 +364,7 @@ public actor WeChatConnector: QueryDiscoveringConnector {
         )
     }
 
-    private static func connectorCandidate(_ post: WeChatPostCandidate, account: WeChatAccountIdentity) -> ConnectorItemCandidate {
+    static func connectorCandidate(_ post: WeChatPostCandidate, account: WeChatAccountIdentity) -> ConnectorItemCandidate {
         ConnectorItemCandidate(
             externalID: WeChatArticleIdentity.externalID(account: account, post: post),
             canonicalURL: WeChatArticleIdentity.canonicalize(post.articleURL),
@@ -344,7 +376,15 @@ public actor WeChatConnector: QueryDiscoveringConnector {
         )
     }
 
-    private static func account(from endpoint: SourceEndpoint) -> WeChatAccountIdentity {
+    public static func account(from endpoint: SourceEndpoint) -> WeChatAccountIdentity {
+        if let metadata = endpoint.weChatAcquisition, !metadata.accountAliases.isEmpty {
+            func value(_ prefix: String) -> String? {
+                metadata.accountAliases.first { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+            }
+            return WeChatAccountIdentity(displayName: metadata.displayName ?? "WeChat Official Account",
+                ghid: value("wechat-account:"), wxid: value("wechat-account-wxid:"), biz: metadata.currentBiz ?? value("wechat-account-biz:"),
+                provenance: .init(providerID: metadata.providerID))
+        }
         let ghid: String?
         let wxid: String?
         let externalID = endpoint.externalID
@@ -386,7 +426,7 @@ public actor WeChatConnector: QueryDiscoveringConnector {
         return components?.url
     }
 
-    private static func publicIdentity(from html: String, articleURL: URL) -> WeChatAccountIdentity? {
+    static func publicIdentity(from html: String, articleURL: URL) -> WeChatAccountIdentity? {
         let document = try? SwiftSoup.parse(html, articleURL.absoluteString)
         let displayName = firstText(document, selectors: ["#js_name", ".rich_media_meta_nickname", "meta[property=og:article:author]"])
             ?? scriptValue(named: "nickname", in: html)
@@ -415,7 +455,7 @@ public actor WeChatConnector: QueryDiscoveringConnector {
         return nil
     }
 
-    private static func scriptValue(named name: String, in html: String) -> String? {
+    static func scriptValue(named name: String, in html: String) -> String? {
         let escaped = NSRegularExpression.escapedPattern(for: name)
         let pattern = "(?:var\\s+)?\(escaped)\\s*[:=]\\s*[\\\"']([^\\\"']+)[\\\"']"
         guard let expression = try? NSRegularExpression(pattern: pattern),
