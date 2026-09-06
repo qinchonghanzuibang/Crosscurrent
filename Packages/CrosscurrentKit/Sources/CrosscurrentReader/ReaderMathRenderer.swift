@@ -63,29 +63,19 @@ actor ReaderMathRenderer {
             mathJax = renderer
         }
         let options = ConversionOptions(display: display)
-        let converted: String
-        do {
-            converted = try renderer.tex2mml(tex, conversionOptions: options)
-        } catch {
-            let compatibleTex = Self.compatibleScriptGroups(in: tex)
-            guard compatibleTex != tex else { throw error }
-            converted = try renderer.tex2mml(compatibleTex, conversionOptions: options)
-        }
+        // The 3.5 wrapper's default number pattern uses unescaped decimal points,
+        // consuming closing braces after numbers in expressions such as _{i=1}.
+        // Correct the token pattern instead of rewriting the publisher's TeX.
+        // AMS is bundled locally and supplies standard notation such as \lVert.
+        let input = TeXInputProcessorOptions(
+            loadPackages: [TeXInputProcessorOptions.Packages.base, TeXInputProcessorOptions.Packages.ams],
+            digits: #"^(?:[0-9]+(?:\{,\}[0-9]{3})*(?:\.[0-9]*)?|\.[0-9]+)"#
+        )
+        let converted = try renderer.tex2mml(tex, conversionOptions: options, inputOptions: input)
         let sanitized = try StaticHTMLPreprocessor.conservativeSanitize(converted).sanitizedHTML
         if cache.count >= 256 { cache.removeAll(keepingCapacity: true) }
         cache[key] = sanitized
         return sanitized
-    }
-
-    /// MathJaxSwift 3.5 rejects some otherwise-valid multi-token braced scripts such as
-    /// `r_{n-1}`. Wrapping only simple script groups in `\mathord` preserves their semantics and
-    /// leaves complex TeX untouched; the original form remains the first conversion attempt.
-    private static func compatibleScriptGroups(in tex: String) -> String {
-        guard let expression = try? NSRegularExpression(pattern: #"([_^])\{([A-Za-z0-9+\- ]{2,})\}"#) else {
-            return tex
-        }
-        let range = NSRange(tex.startIndex..<tex.endIndex, in: tex)
-        return expression.stringByReplacingMatches(in: tex, range: range, withTemplate: "$1\\\\mathord{$2}")
     }
 
     private struct CacheKey: Hashable {

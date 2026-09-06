@@ -1,6 +1,7 @@
 import CrosscurrentBrowser
 import CrosscurrentReader
 import Foundation
+import SwiftSoup
 import Testing
 
 @Test func linkPreviewPolicyRejectsLocalAndSecretBearingSchemes() throws {
@@ -174,6 +175,21 @@ func readerRendersEveryFormulaInARealWorldParagraph() async {
     #expect(!rendered.contains("$r_n"))
     #expect(!rendered.contains("$\\tau_h"))
     #expect(!rendered.contains("$\\leq"))
+}
+
+@Test func readerRendersObservedAverageAndRegularizedLossFormulas() async throws {
+    let source = #"""
+    <p>For observations \(x_1, x_2, \ldots, x_n\), the average is \(\bar{x} = \frac{1}{n}\sum_{i=1}^{n}x_i\).</p>
+    <div>\[ L(\theta) = \frac{1}{n}\sum_{i=1}^{n}\left(y_i - f_\theta(x_i)\right)^2 + \lambda\lVert\theta\rVert_2^2 \]</div>
+    """#
+    let rendered = await ReaderHTMLPreparer.prepare(source)
+    let document = try SwiftSoup.parseBodyFragment(rendered)
+    #expect(try document.select("math").count == 3)
+    #expect(try document.select("math[display=block]").count == 1)
+    #expect(try document.select("mfrac").count == 2)
+    #expect(try document.select("mo").contains { try $0.text() == "∑" })
+    #expect(!rendered.contains(#"\("#))
+    #expect(!rendered.contains(#"\["#))
 }
 
 @Test func authenticatedPlatformCaptureFixturesAreVersionedAndSecretRedacted() throws {
