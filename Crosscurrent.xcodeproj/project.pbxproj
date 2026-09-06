@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		092F9210750CB078FAEF0A5D /* CrosscurrentIntelligence in Frameworks */ = {isa = PBXBuildFile; productRef = 4E36FF658E8113FDAB505E63 /* CrosscurrentIntelligence */; };
+		09F7F8019998C900F8F35059 /* Localizable.stringsdict in Resources */ = {isa = PBXBuildFile; fileRef = CD80BCFF52DE15D9BE9160D5 /* Localizable.stringsdict */; };
 		141CF06A163B0DC2BAAD8CCA /* CrosscurrentUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB8660C54F40EBF25C10619D /* CrosscurrentUITests.swift */; };
 		1CAC03C4AE4017C9C4EC7CED /* FlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1EC027581EDD97CF140AE11 /* FlowView.swift */; };
 		246D1835F305ADC1F4E58477 /* EventDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64945D1269BE0DCA8C9ED616 /* EventDetailView.swift */; };
@@ -116,11 +117,13 @@
 		39318958E775B05FC45110A6 /* SearchScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchScreen.swift; sourceTree = "<group>"; };
 		4033E09B86E941E7A8700A52 /* CrosscurrentShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CrosscurrentShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		53B40EF21028D172E7E34A05 /* CrosscurrentApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrosscurrentApp.swift; sourceTree = "<group>"; };
+		5DF77AEF2C007117D6412575 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.stringsdict; name = en; path = en.lproj/Localizable.stringsdict; sourceTree = "<group>"; };
 		5E92D9A64B58B55103E28BC8 /* TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayView.swift; sourceTree = "<group>"; };
 		64945D1269BE0DCA8C9ED616 /* EventDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventDetailView.swift; sourceTree = "<group>"; };
 		8E84B6068F8FCCC1AE522BAE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		97A2CAE7FCB7B7B1DA106BE8 /* CrosscurrentKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CrosscurrentKit; path = Packages/CrosscurrentKit; sourceTree = SOURCE_ROOT; };
 		984A802A36BBC846162B74EE /* AgentMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMain.swift; sourceTree = "<group>"; };
+		B9013BD17F8421A971E6FEEA /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.stringsdict; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.stringsdict"; sourceTree = "<group>"; };
 		BB8660C54F40EBF25C10619D /* CrosscurrentUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrosscurrentUITests.swift; sourceTree = "<group>"; };
 		C9B7C06EE432979C88476A53 /* CrosscurrentBrowserWorker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CrosscurrentBrowserWorker.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CF7681D8F643759D41F14069 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -282,6 +285,7 @@
 			isa = PBXGroup;
 			children = (
 				9929BD1FB50B41990BF29A11 /* Localizable.strings */,
+				CD80BCFF52DE15D9BE9160D5 /* Localizable.stringsdict */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -440,7 +444,6 @@
 					};
 					D52EA5C3F64931F55FF4A954 = {
 						DevelopmentTeam = "";
-						ProvisioningStyle = Automatic;
 						TestTargetID = E4609D1AD4DE4DF9A57773DC;
 					};
 					DDB8EC62B3222FBEF8C5ECA1 = {
@@ -487,6 +490,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				57864CFF309A91EDB5DC7632 /* Localizable.strings in Resources */,
+				09F7F8019998C900F8F35059 /* Localizable.stringsdict in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -618,6 +622,15 @@
 				FAB54DB8D7B6FF87785153E8 /* zh-Hans */,
 			);
 			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+		CD80BCFF52DE15D9BE9160D5 /* Localizable.stringsdict */ = {
+			isa = PBXVariantGroup;
+			children = (
+				5DF77AEF2C007117D6412575 /* en */,
+				B9013BD17F8421A971E6FEEA /* zh-Hans */,
+			);
+			name = Localizable.stringsdict;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */
@@ -764,7 +777,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

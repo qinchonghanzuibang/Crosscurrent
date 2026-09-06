@@ -10,21 +10,23 @@ final class CrosscurrentUITests: XCTestCase {
         let app = launchFixture(state: "dense")
         XCTAssertTrue(app.staticTexts["Today"].waitForExistence(timeout: 8))
 
-        for destination in ["flow", "sources", "people", "topics", "saved", "search"] {
+        for destination in ["flow", "following", "saved", "search"] {
             let row = app.descendants(matching: .any)["sidebar-\(destination)"]
             XCTAssertTrue(row.waitForExistence(timeout: 3), "Missing sidebar destination \(destination)")
             row.click()
         }
 
-        app.descendants(matching: .any)["sidebar-today"].click()
-        let firstEvent = app.descendants(matching: .any)["today-event-10000000-0000-0000-0000-000000000001"]
+        app.descendants(matching: .any)["sidebar-flow"].click()
+        let firstEvent = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "flow-event-")).firstMatch
         XCTAssertTrue(firstEvent.waitForExistence(timeout: 5))
         firstEvent.click()
-        let reader = app.descendants(matching: .any)["event-section-reader"]
-        XCTAssertTrue(reader.waitForExistence(timeout: 5))
-        reader.click()
-        XCTAssertTrue(app.buttons["Article actions"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Selection actions"].exists)
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Back"].exists)
+        app.typeKey("f", modifierFlags: [.command, .shift])
+        XCTAssertTrue(app.buttons["Exit Focus Reading"].waitForExistence(timeout: 3))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.buttons["Back"].click()
+        XCTAssertTrue(firstEvent.waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -32,8 +34,15 @@ final class CrosscurrentUITests: XCTestCase {
         let app = launchFixture(state: "empty")
         XCTAssertTrue(app.staticTexts["No Events Yet"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["Add a Source"].exists)
+        app.buttons["Add a Source"].click()
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.textFields["Official Account name or Source URL"].exists)
+        app.buttons["Cancel"].click()
         app.descendants(matching: .any)["sidebar-flow"].click()
         XCTAssertTrue(app.staticTexts["No Events in Flow"].waitForExistence(timeout: 5))
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 3))
+        app.buttons["Cancel"].click()
     }
 
     @MainActor

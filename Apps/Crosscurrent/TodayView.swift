@@ -18,14 +18,23 @@ struct TodayView: View {
                             systemImage: "newspaper",
                             description: Text("Add or refresh Sources to build your first evidence-backed daily briefing.")
                         )
-                        Button("Add a Source") { model.selection = .following; model.followingFilter = .sources }
+                        Button("Add a Source") { model.showAddSource() }
                             .buttonStyle(.borderedProminent)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 42)
+                } else if model.digestSections.values.allSatisfy(\.isEmpty) {
+                    ContentUnavailableView {
+                        Label("No new developments", systemImage: "checkmark.circle")
+                    } description: {
+                        Text("Your library is ready. Explore Flow for earlier articles, or refresh your sources for new developments.")
+                    } actions: {
+                        Button("Explore Flow") { model.selection = .flow }
+                    }
+                    .padding(.vertical, 42)
                 } else {
                     let lead = section(.today)
-                    SectionRule("5 things worth knowing", trailing: Self.leadEventCount(lead.count))
+                    SectionRule("Worth knowing", trailing: Self.leadEventCount(lead.count))
                     if lead.isEmpty {
                         Text("No Event currently meets the evidence and relevance bar for the top five. The remaining briefing stays available below.")
                             .font(.subheadline)
@@ -63,7 +72,20 @@ struct TodayView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .toolbar {
-            ToolbarItem { Button { model.manualRefreshToday() } label: { Label("Refresh", systemImage: "arrow.clockwise") } }
+            ToolbarItem {
+                if model.refreshInProgress { ProgressView().controlSize(.small).help("Refreshing sources…") }
+                else { Button { model.manualRefreshToday() } label: { Label("Refresh", systemImage: "arrow.clockwise") } }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let message = model.activityMessage {
+                HStack {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button { model.activityMessage = nil } label: { Label("Dismiss", systemImage: "xmark") }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless)
+                }.padding(12).background(.bar)
+            }
         }
     }
 
@@ -82,7 +104,7 @@ struct TodayView: View {
                     }
                 }
             }
-            Rectangle().frame(height: 3).foregroundStyle(CrosscurrentColor.ink)
+            Rectangle().frame(height: 3).foregroundStyle(.primary)
         }
     }
 
@@ -97,7 +119,7 @@ struct TodayView: View {
                         Text(event.primarySource).font(.caption).foregroundStyle(.secondary)
                         Menu {
                             Text("Why here?")
-                            ForEach(event.reasons, id: \.self) { Text(reasonLabel($0)) }
+                            ForEach(event.reasons, id: \.self) { Text(LocalizedStringKey(reasonLabel($0))) }
                         } label: { Image(systemName: "info.circle").foregroundStyle(.secondary) }
                         .menuStyle(.borderlessButton)
                     }.padding(.vertical, 11)
@@ -154,7 +176,7 @@ private struct TodayEventCard: View {
                 VStack(alignment: .leading, spacing: 9) {
                     HStack(spacing: 8) {
                         EventReadMarker(event.readStatus)
-                        Text(event.topics.first ?? "Event").font(.caption.weight(.semibold)).foregroundStyle(CrosscurrentColor.accent)
+                        Text(event.topics.first ?? String(localized: "Event")).font(.caption.weight(.semibold)).foregroundStyle(CrosscurrentColor.accent)
                     }
                     Text(event.title)
                         .font(.system(size: 25, weight: .bold, design: .serif))

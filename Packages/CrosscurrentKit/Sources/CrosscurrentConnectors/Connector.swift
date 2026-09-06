@@ -195,19 +195,20 @@ public enum ConnectorError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .unsupportedInput: "This connector cannot discover the supplied source."
-        case .authenticationRequired: "Reconnect this account to continue refreshing."
-        case .interactionRequired: "Open Crosscurrent to complete this connector action."
-        case let .rateLimited(retryAfter): retryAfter.map { "Rate limited; retry in \(Int($0)) seconds." } ?? "Rate limited."
-        case let .transientHTTP(statusCode, _): "The source returned HTTP \(statusCode); Crosscurrent will retry."
-        case let .platformChanged(message): "The platform changed: \(message)"
-        case let .policyDenied(message): "Connector policy denied the operation: \(message)"
-        case let .invalidResponse(message): "The connector returned an invalid response: \(message)"
-        case .temporarilyUnavailable: "The connector is temporarily unavailable."
-        case let .configurationRequired(message): message
-        case .quotaExhausted: "The configured provider balance is exhausted."
-        case .accountUnavailable: "This Official Account is unavailable or has migrated."
-        case .articleUnavailable: "This article is temporarily unavailable."
+        case .unsupportedInput: String(localized: "This connector cannot discover the supplied source.")
+        case .authenticationRequired: String(localized: "Reconnect this account to continue refreshing.")
+        case .interactionRequired: String(localized: "Open Crosscurrent to complete this connector action.")
+        case let .rateLimited(retryAfter): retryAfter.map { String(localized: "Rate limited; retry in \(Int($0)) seconds.") } ?? String(localized: "Rate limited.")
+        case let .transientHTTP(statusCode, _): String(localized: "The source returned HTTP \(statusCode); Crosscurrent will retry.")
+        case let .platformChanged(message): String(localized: "The platform changed: \(message)")
+        case let .policyDenied(message): String(localized: "Connector policy denied the operation: \(message)")
+        case .invalidResponse("HTTP 404"): String(localized: "No page or feed was found at this address (HTTP 404). Check the URL and try again.")
+        case let .invalidResponse(message): String(localized: "The connector returned an invalid response: \(message)")
+        case .temporarilyUnavailable: String(localized: "The connector is temporarily unavailable.")
+        case let .configurationRequired(message): String(localized: "Additional source configuration is required: \(message)")
+        case .quotaExhausted: String(localized: "The configured provider balance is exhausted.")
+        case .accountUnavailable: String(localized: "This Official Account is unavailable or has migrated.")
+        case let .articleUnavailable(definitive): definitive ? String(localized: "This article is no longer available.") : String(localized: "This article is temporarily unavailable.")
         }
     }
 }

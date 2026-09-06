@@ -68,10 +68,13 @@ struct FollowingView: View {
         } content: {
             switch model.followingFilter {
             case .all: AllFollowingView()
-            case .sources: SourcesView(embedded: true, followedOnly: true)
+            case .sources: SourcesView(embedded: true)
             case .people: PeopleView(embedded: true)
             case .topics: TopicsView(embedded: true)
             }
+        }
+        .toolbar {
+            ToolbarItem { Button("Add Source", systemImage: "plus") { model.showAddSource() } }
         }
     }
 }
@@ -88,17 +91,23 @@ private struct AllFollowingView: View {
             List {
                 if !sources.isEmpty {
                     Section("Sources") { ForEach(sources) { source in
-                        HStack { SourceMonogram(source.revision.displayName, size: 30); Text(source.revision.displayName); Spacer(); Text(source.endpoints.contains { $0.connector == .weChatOfficialAccount } ? String(localized: "WeChat Official Account") : source.endpoints.first?.connector.rawValue ?? "").font(.caption).foregroundStyle(.secondary) }
+                        Button { model.openLibraryObject(source.id.description, kind: .source) } label: {
+                            HStack { SourceMonogram(source.revision.displayName, size: 30); Text(source.revision.displayName); Spacer(); Image(systemName: "chevron.right").foregroundStyle(.tertiary) }
+                        }.buttonStyle(.plain)
                     } }
                 }
                 if !people.isEmpty {
                     Section("People") { ForEach(people) { person in
-                        HStack { SourceMonogram(person.revision.displayName, size: 30); Text(person.revision.displayName); Spacer(); Text(person.sourceNames.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                        Button { model.openLibraryObject(person.id.description, kind: .person) } label: {
+                            HStack { SourceMonogram(person.revision.displayName, size: 30); Text(person.revision.displayName); Spacer(); Text(person.sourceNames.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                        }.buttonStyle(.plain)
                     } }
                 }
                 if !topics.isEmpty {
                     Section("Topics") { ForEach(topics) { topic in
-                        HStack { Text("#").foregroundStyle(CrosscurrentColor.accent); Text(topic.revision.name); Spacer(); Text(String.localizedStringWithFormat(String(localized: "%lld Events"), topic.eventCount)).font(.caption).foregroundStyle(.secondary) }
+                        Button { model.openLibraryObject(topic.id.description, kind: .topic) } label: {
+                            HStack { Text("#").foregroundStyle(CrosscurrentColor.accent); Text(topic.revision.name); Spacer(); Text(String.localizedStringWithFormat(String(localized: "%lld Events"), topic.eventCount)).font(.caption).foregroundStyle(.secondary) }
+                        }.buttonStyle(.plain)
                     } }
                 }
             }.listStyle(.inset)
@@ -143,7 +152,7 @@ struct SourcesView: View {
                         } catch { status = error.localizedDescription }
                     }
                 }
-                Button { model.presentsAddSource = true } label: { Image(systemName: "plus") }
+                if !embedded { Button("Add Source", systemImage: "plus") { model.presentsAddSource = true } }
             }.padding(.horizontal, 24).padding(.vertical, embedded ? 10 : 24)
             if !status.isEmpty {
                 Text(status)
@@ -187,6 +196,7 @@ struct SourcesView: View {
                                 Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh(snapshot) } }
                                     .labelStyle(.iconOnly)
                                     .help("Refresh Source")
+                                    .disabled(model.refreshingSourceIDs.contains(snapshot.id) || model.refreshInProgress)
                                 if !isWeChat(snapshot), let endpoint = snapshot.endpoints.first(where: { $0.health == .authenticationRequired || $0.health == .platformChanged }) {
                                     Button("Reconnect") { Task { await model.reconnect(endpoint) } }
                                 }
@@ -203,7 +213,9 @@ struct SourcesView: View {
                                         Button("Coverage: \(ecosystem.displayName)") { model.setCoverage(snapshot, ecosystem: ecosystem) }
                                     }
                                 } label: { Image(systemName: "ellipsis.circle") }
+                                .accessibilityLabel("Source options")
                                 Button(snapshot.source.isFollowed ? "Following" : "Follow") { model.setSourceFollowed(snapshot, followed: !snapshot.source.isFollowed) }
+                                    .help(snapshot.source.isFollowed ? "Unfollow Source" : "Follow Source")
                             }.controlSize(.small)
                             if let endpoint = snapshot.endpoints.first,
                                let diagnostic = model.platformDiagnosticStatus[endpoint.id] {
@@ -214,7 +226,10 @@ struct SourcesView: View {
                 }.listStyle(.inset)
             }
         }
-        .sheet(isPresented: Binding(get: { adding || model.presentsAddSource }, set: { value in adding = value; model.presentsAddSource = value })) {
+        .sheet(isPresented: Binding(get: { adding || model.presentsAddSource }, set: { value in adding = value; model.presentsAddSource = value }), onDismiss: {
+            discoveryTask?.cancel()
+            model.clearSourcePreview()
+        }) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Add Source").font(.title.bold())
                 TextField("Official Account name or Source URL", text: $url)
@@ -224,10 +239,11 @@ struct SourcesView: View {
                 Text("Search an Official Account by name, or paste a feed, creator, repository, webpage, or public WeChat article URL. Searches run only when you submit.")
                     .font(.caption).foregroundStyle(.secondary)
                 if model.sourceFollowInProgress {
-                    ProgressView("Following and fetching recent articles…")
+                    ProgressView("Adding source and fetching recent articles…")
                         .padding(.vertical, 18)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                else if model.sourceDiscoveryInProgress { ProgressView("Finding source…").controlSize(.small) }
                 if !model.sourceSearchResults.isEmpty {
                     ScrollView {
                         LazyVStack(spacing: 10) {
@@ -319,7 +335,7 @@ struct SourcesView: View {
                             Text(preview.result.sourceRevision.displayName).font(.headline)
                             Text(preview.result.sourceRevision.summary ?? preview.inputURL?.absoluteString ?? preview.inputQuery ?? "")
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                            Text(preview.connectorKind == .weChatOfficialAccount ? String(localized: "WeChat Official Account") : preview.result.display?.category ?? "\(preview.connectorKind.rawValue) · \(preview.result.recentCandidates.count) recent samples")
+                            Text(preview.connectorKind == .weChatOfficialAccount ? String(localized: "WeChat Official Account") : preview.result.display?.category ?? String(localized: "\(preview.connectorKind.rawValue) · \(preview.result.recentCandidates.count) recent samples"))
                                 .font(.caption2).foregroundStyle(.tertiary)
                         }
                     }
@@ -392,11 +408,15 @@ struct SourcesView: View {
     }
 
     private func submitDiscovery() {
+        guard !model.sourceFollowInProgress else { return }
         discoveryTask?.cancel()
         let input = url.trimmingCharacters(in: .whitespacesAndNewlines)
         discoveryTask = Task {
-            if isSubmittedURL { model.clearSourcePreview(); status = await model.previewSource(input) }
-            else { status = await model.searchSources(input) }
+            let message: String
+            if isSubmittedURL { model.clearSourcePreview(); message = await model.previewSource(input) }
+            else { message = await model.searchSources(input) }
+            guard !Task.isCancelled else { return }
+            status = message
             selectedAction = model.sourcePreview?.availableActions.first ?? .subscribe
         }
     }
@@ -669,6 +689,9 @@ struct LibraryObjectDetailView: View {
             .padding(28)
         }
         .navigationTitle(title)
+        .toolbar {
+            ToolbarItem { Button("Back", systemImage: "chevron.left") { model.selection = .following } }
+        }
     }
 }
 
@@ -680,6 +703,9 @@ struct ItemDetailView: View {
         if let item = model.selectedItemDetail {
             VStack(spacing: 0) {
                 HStack(spacing: 16) {
+                    Button("Back", systemImage: "chevron.left") {
+                        model.selection = model.itemReturnDestination
+                    }
                     VStack(alignment: .leading, spacing: 4) {
                         if item.isHistorical { StatusPill("Historical revision", color: .secondary) }
                         Text(item.author.map { $0 == item.sourceName ? item.sourceName : "\(item.sourceName) · \($0)" } ?? item.sourceName)

@@ -17,7 +17,7 @@ enum CrosscurrentAgentMain {
     static func main() {
         let runtime = AgentRuntime()
         runtime.start()
-        RunLoop.main.run()
+        withExtendedLifetime(runtime) { RunLoop.main.run() }
     }
 }
 
@@ -137,7 +137,7 @@ final class AgentRuntime: NSObject, @unchecked Sendable {
                         _ = try await repository.completeJob(lease, checkpoint: checkpoint)
                     } catch {
                         let retry = JobRetryClassifier.classify(error, attempt: job.attemptCount)
-                        if retry.exhausted { _ = try? await repository.suspendJob(lease, failureClass: retry.name) }
+                        if retry.exhausted { _ = try? await repository.suspendJob(lease, failureClass: retry.name, retryAt: retry.retryAt) }
                         else { _ = try? await repository.failJob(lease, retryClass: retry.name, retryAt: retry.retryAt) }
                         if job.kind == CrosscurrentJobKind.refresh,
                            let payload = try? JSONDecoder().decode(RefreshJobPayload.self, from: job.payload),
@@ -163,23 +163,10 @@ final class AgentRuntime: NSObject, @unchecked Sendable {
 
     private func enqueueDueRefreshes(repository: CrosscurrentRepository, registry: ConnectorRegistry, now: Date) async throws {
         let snapshots = try await repository.sourceSnapshots()
-        for snapshot in snapshots where !snapshot.source.isArchived {
-            let weChatEndpoints = snapshot.endpoints.filter { $0.connector == .weChatOfficialAccount && $0.health != .disabled }
-            let primaryWeChat = weChatEndpoints.min { ($0.weChatAcquisition?.priority ?? 100) < ($1.weChatAcquisition?.priority ?? 100) }
-            let scheduledEndpoints = snapshot.endpoints.filter { $0.connector != .weChatOfficialAccount } + [primaryWeChat].compactMap { $0 }
-            for endpoint in scheduledEndpoints {
-                let refreshInterval: TimeInterval = endpoint.connector == .weChatOfficialAccount ? 4 * 60 * 60 : 30 * 60
-                // One logical account refresh lets the executor choose and fail over
-                // among endpoints. A failed primary must not disable a healthy mirror.
-                let lastSuccess = endpoint.connector == .weChatOfficialAccount ? weChatEndpoints.compactMap(\.lastSuccessfulSync).max() : endpoint.lastSuccessfulSync
-                let canRefresh = endpoint.connector == .weChatOfficialAccount || ![ConnectorHealth.authenticationRequired, .platformChanged, .configurationRequired, .temporarilyUnavailable, .error, .disabled].contains(endpoint.health)
-                guard lastSuccess.map({ now.timeIntervalSince($0) >= refreshInterval }) ?? true,
-                      canRefresh,
-                      await registry.connector(for: endpoint.connector) != nil
-                else { continue }
-                let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpoint.id))
-                _ = try await repository.scheduleRefreshJob(endpointID: endpoint.id, payload: payload, manual: false, now: now)
-            }
+        for endpoint in SourceRefreshPlanner.dueEndpoints(in: snapshots, now: now) {
+            guard await registry.connector(for: endpoint.connector) != nil else { continue }
+            let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpoint.id))
+            _ = try await repository.scheduleRefreshJob(endpointID: endpoint.id, payload: payload, manual: false, now: now)
         }
     }
 

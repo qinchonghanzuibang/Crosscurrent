@@ -19,15 +19,16 @@ struct FlowView: View {
             }.padding(24)
             Divider()
             if sortedEvents.isEmpty {
-                ContentUnavailableView(
-                    "No Events in Flow",
-                    systemImage: "line.3.horizontal.decrease",
-                    description: Text("Refresh a Source to ingest evidence; Crosscurrent will cluster supported developments without requiring an AI provider.")
-                )
+                ContentUnavailableView {
+                    Label("No Events in Flow", systemImage: "line.3.horizontal.decrease")
+                } description: {
+                    Text("Refresh a Source to ingest evidence; Crosscurrent will cluster supported developments without requiring an AI provider.")
+                } actions: { Button("Add Source") { model.showAddSource() } }
             } else {
                 List(sortedEvents) { event in
                     Button { model.open(event) } label: { FlowEventRow(event: event, isSaved: model.savedEventIDs.contains(event.id)) }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("flow-event-\(event.id.description)")
                         .contextMenu {
                             Button(model.savedEventIDs.contains(event.id) ? "Remove from Saved" : "Save Event") { model.toggleSaved(event) }
                             Button("Mark Unread") { model.setEventUnread(event) }
@@ -38,7 +39,11 @@ struct FlowView: View {
     }
 
     private var sortedEvents: [EventCardModel] {
-        ranked ? model.events.sorted { $0.score > $1.score } : model.events.sorted { $0.date > $1.date }
+        model.events.sorted {
+            if ranked, $0.score != $1.score { return $0.score > $1.score }
+            if $0.date != $1.date { return $0.date > $1.date }
+            return $0.id.description < $1.id.description
+        }
     }
 }
 
@@ -47,7 +52,7 @@ private struct FlowEventRow: View {
     var isSaved: Bool
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            EventReadMarker(event.readStatus).frame(minWidth: 72, alignment: .leading)
+            EventReadMarker(event.readStatus).frame(minWidth: 12, alignment: .leading)
             VStack(alignment: .leading, spacing: 6) {
                 Text(event.title).font(.headline).lineLimit(2)
                 Text(event.summary).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
@@ -60,7 +65,7 @@ private struct FlowEventRow: View {
             Spacer()
             VStack(alignment: .trailing, spacing: 5) {
                 Text(event.date, style: .relative).font(.caption).foregroundStyle(.secondary)
-                Text(event.reasons.first.map(reasonText) ?? "Ranked").font(.caption2).foregroundStyle(CrosscurrentColor.accent)
+                Text(event.reasons.first.map(reasonText) ?? String(localized: "Ranked")).font(.caption2).foregroundStyle(CrosscurrentColor.accent)
                 if isSaved { Image(systemName: "bookmark.fill").font(.caption).foregroundStyle(CrosscurrentColor.accent) }
             }
         }.padding(.vertical, 10)
