@@ -101,7 +101,11 @@ final class AppModel: ObservableObject {
     @Published var digestSections: [DigestSection: [EventCardModel]] = [:]
     @Published var sourcePreview: SourceDiscoveryPreview?
     @Published var sourceSearchResults: [SourceDiscoveryPreview] = []
+    @Published var sourceSearchQuery: String?
+    @Published var searchMoreNeedsConfiguration = false
     @Published var sourceDiscoveryInProgress = false
+    @Published var sourceFollowInProgress = false
+    @Published var settingsTab = "General"
     @Published var weChatIndexConfigured = false
     @Published var weChatIndexStatus = String(localized: "Not configured")
     @Published var digestRevisionReason: DigestRevisionReason = .initialDaily
@@ -173,22 +177,19 @@ final class AppModel: ObservableObject {
         do {
             let locations: DatabaseLocations
             let teamID = Bundle.main.object(forInfoDictionaryKey: "CrosscurrentTeamIdentifier") as? String ?? ""
-            if !teamID.isEmpty, let group = try? DatabaseLocations.appGroup() {
+            #if DEBUG
+            let isolatedContainer = Self.fixtureContainer
+            #else
+            let isolatedContainer: URL? = nil
+            #endif
+            if let isolatedContainer {
+                locations = DatabaseLocations(container: isolatedContainer)
+            } else if !teamID.isEmpty, let group = try? DatabaseLocations.appGroup() {
                 locations = group
             } else {
-                #if DEBUG
-                if let fixtureContainer = Self.fixtureContainer {
-                    locations = DatabaseLocations(container: fixtureContainer)
-                } else {
-                    locations = try DatabaseLocations.development()
-                    developmentDataRoot = true
-                    _ = try LocalDataManager.prepareDevelopmentRoot(locations)
-                }
-                #else
                 locations = try DatabaseLocations.development()
                 developmentDataRoot = true
                 _ = try LocalDataManager.prepareDevelopmentRoot(locations)
-                #endif
             }
             let database = try CrosscurrentDatabase.open(at: locations, role: .mainApp)
             self.database = database
@@ -211,7 +212,14 @@ final class AppModel: ObservableObject {
             weChatIndexConfigured = await weChatProvider.healthCheck() == .configured
             weChatIndexStatus = weChatIndexConfigured ? String(localized: "Configured") : String(localized: "Not configured")
             diagnosticCaptureDirectory = locations.container.appending(path: "Diagnostics/PlatformCaptures", directoryHint: .isDirectory)
-            let connectors = await ConnectorCatalog.production(browser: browser, weChatProvider: weChatProvider, http: http)
+            let catalogs = CachedWeChatPublicFeedCatalog.builtIn(cacheDirectory: locations.container.appending(path: "Acquisition/WeChatCatalogs", directoryHint: .isDirectory))
+            var weChatPublicHTTP: any ConnectorHTTPClient = AnonymousPublicWeChatHTTPClient()
+            #if DEBUG
+            if isolatedContainer != nil, ProcessInfo.processInfo.arguments.contains("--fixture-wechat-fail-primary") {
+                weChatPublicHTTP = PrimaryWeChatFailureFixtureHTTPClient()
+            }
+            #endif
+            let connectors = await ConnectorCatalog.production(browser: browser, weChatProvider: weChatProvider, weChatCatalogs: catalogs, weChatPublicHTTP: weChatPublicHTTP, http: http)
             refreshExecutor = RefreshJobExecutor(repository: repository, connectors: connectors, blobStore: blobStore, http: http)
             discoveryService = SourceDiscoveryService(repository: repository, connectors: connectors, blobStore: blobStore, http: http)
             let maintainer = EvidenceEventMaintainer(repository: repository)
@@ -493,7 +501,7 @@ final class AppModel: ObservableObject {
     func foregroundRefresh(endpointID: SourceEndpointID) async throws {
         guard let repository, let refreshExecutor else { throw CocoaError(.fileNoSuchFile) }
         let startedAt = Date.now
-        let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpointID))
+        let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpointID, manual: true))
         let job = try await repository.scheduleRefreshJob(endpointID: endpointID, payload: payload, manual: true)
         if job.state == .leased { try? await reloadCanonicalLibrary(); return }
         guard let (leasedJob, lease) = try await repository.leaseJob(id: job.id, owner: "main-foreground", duration: 120) else {
@@ -524,7 +532,7 @@ final class AppModel: ObservableObject {
     }
 
     func refresh(_ snapshot: StoredSourceSnapshot) async {
-        guard let endpoint = snapshot.endpoints.first else { return }
+        guard let endpoint = snapshot.endpoints.min(by: { ($0.weChatAcquisition?.priority ?? 100) < ($1.weChatAcquisition?.priority ?? 100) }) else { return }
         do { try await foregroundRefresh(endpointID: endpoint.id) }
         catch {
             if RefreshFailureHealthClassifier.isTransient(error) == false { startupError = error.localizedDescription }
@@ -667,7 +675,7 @@ final class AppModel: ObservableObject {
         case .configured:
             weChatIndexConfigured = true
             weChatIndexStatus = String(localized: "Configured")
-            return String(localized: "The API key is available to Crosscurrent. Account search performs the first paid request.")
+            return String(localized: "The API key is available to Crosscurrent. Search More can make a paid request; public catalog search remains free.")
         case .missingConfiguration:
             weChatIndexConfigured = false
             weChatIndexStatus = String(localized: "Not configured")
@@ -1044,35 +1052,61 @@ final class AppModel: ObservableObject {
     }
 
     func searchSources(_ query: String) async -> String {
+        searchMoreNeedsConfiguration = false
+        sourceSearchQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return await performSourceSearch(query, more: false)
+    }
+
+    func searchMoreWeChatSources() async -> String {
+        guard let query = sourceSearchQuery else { return String(localized: "Enter an Official Account name.") }
+        return await performSourceSearch(query, more: true)
+    }
+
+    private func performSourceSearch(_ query: String, more: Bool) async -> String {
         guard let discoveryService else { return String(localized: "Source discovery is not ready.") }
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return String(localized: "Enter an Official Account name.") }
         sourceDiscoveryInProgress = true
         defer { sourceDiscoveryInProgress = false }
         do {
-            let results = try await discoveryService.search(normalized, context: ConnectorContext(allowsUserInteraction: true))
+            let context = ConnectorContext(allowsUserInteraction: true)
+            let results: [SourceDiscoveryPreview]
+            if more { results = try await discoveryService.searchMore(normalized, context: context) }
+            else { results = try await discoveryService.search(normalized, context: context) }
             try Task.checkCancellation()
-            sourceSearchResults = results
+            if more {
+                var existingIdentities = Set(sourceSearchResults.flatMap { $0.result.endpoints }.flatMap { ($0.weChatAcquisition?.accountAliases ?? []) + [$0.externalID] })
+                for result in results {
+                    let identities = Set(result.result.endpoints.flatMap { ($0.weChatAcquisition?.accountAliases ?? []) + [$0.externalID] })
+                    guard identities.isDisjoint(with: existingIdentities) else { continue }
+                    sourceSearchResults.append(result)
+                    existingIdentities.formUnion(identities)
+                }
+            } else {
+                sourceSearchResults = results
+            }
+            searchMoreNeedsConfiguration = false
             sourcePreview = nil
-            return results.isEmpty ? String(localized: "No matching Official Accounts found.") : String.localizedStringWithFormat(String(localized: "%lld Official Accounts found."), results.count)
+            if results.isEmpty {
+                return more ? String(localized: "No additional Official Accounts found.") : String(localized: "No public catalog matches. Search More can expand coverage.")
+            }
+            return String.localizedStringWithFormat(String(localized: "%lld Official Accounts found."), sourceSearchResults.count)
         } catch is CancellationError {
             return ""
         } catch ConnectorError.configurationRequired {
-            sourceSearchResults = []
             weChatIndexConfigured = false
-            weChatIndexStatus = String(localized: "Configuration required")
-            return String(localized: "Configure the WeChat Index API key in Settings.")
+            weChatIndexStatus = String(localized: "Not configured")
+            searchMoreNeedsConfiguration = more
+            return String(localized: "Broader WeChat search requires an optional index provider in Advanced settings. Public catalog accounts remain available without a key.")
         } catch ConnectorError.quotaExhausted {
-            sourceSearchResults = []
             weChatIndexConfigured = true
             weChatIndexStatus = String(localized: "Provider balance exhausted")
             return weChatIndexStatus
         } catch ConnectorError.rateLimited {
-            sourceSearchResults = []
             weChatIndexStatus = String(localized: "Rate limited")
             return String(localized: "The WeChat Index is rate limited. Try again later.")
         } catch {
-            sourceSearchResults = []
+            if !more { sourceSearchResults = [] }
             startupError = error.localizedDescription
             return error.localizedDescription
         }
@@ -1112,12 +1146,12 @@ final class AppModel: ObservableObject {
     func subscribeSourcePreview(action: SourceDiscoveryAction = .subscribe) async -> String {
         guard let preview = sourcePreview, let discoveryService else { return String(localized: "Discover a Source first.") }
         sourceDiscoveryInProgress = true
-        defer { sourceDiscoveryInProgress = false }
+        sourceFollowInProgress = preview.connectorKind == .weChatOfficialAccount
+        defer { sourceDiscoveryInProgress = false; sourceFollowInProgress = false }
         do {
             let selectedAction = preview.availableActions.contains(action) ? action : (preview.availableActions.first ?? .subscribe)
             let committed = try await discoveryService.commit(preview, action: selectedAction)
-            sourcePreview = nil
-            pendingPlatformCapture = nil
+            clearSourcePreview()
             if let inputURL = preview.inputURL, let platform = Self.authenticatedPlatform(for: inputURL) { pendingBrowserAccounts[platform] = nil }
             try await reloadCanonicalLibrary()
             if selectedAction != .importOnce, let endpoint = committed.endpointIDs.first { try await foregroundRefresh(endpointID: endpoint) }
@@ -1128,6 +1162,8 @@ final class AppModel: ObservableObject {
     func clearSourcePreview() {
         sourcePreview = nil
         sourceSearchResults = []
+        sourceSearchQuery = nil
+        searchMoreNeedsConfiguration = false
         pendingPlatformCapture = nil
     }
 
@@ -1428,6 +1464,20 @@ private struct AIProviderSettings: Codable {
     var endpoint: URL
     var model: String
 }
+
+#if DEBUG
+/// Exercise public-feed failover only inside an explicitly isolated qualification library.
+private struct PrimaryWeChatFailureFixtureHTTPClient: ConnectorHTTPClient {
+    private let publicHTTP = AnonymousPublicWeChatHTTPClient()
+
+    func get(_ url: URL, headers: [String: String]) async throws -> ConnectorHTTPResponse {
+        if url.host?.lowercased() == WeChatCatalogID.wechat2rss.feedHost {
+            throw URLError(.cannotConnectToHost)
+        }
+        return try await publicHTTP.get(url, headers: headers)
+    }
+}
+#endif
 
 enum CrosscurrentServices {
     static var agent: SMAppService { .agent(plistName: "com.chonghanqin.crosscurrent.agent.plist") }

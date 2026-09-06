@@ -4,6 +4,8 @@ public enum ConnectorCatalog {
     public static func production(
         browser: any BrowserCreatorSessionClient,
         weChatProvider: any WeChatIndexProvider,
+        weChatCatalogs: [any WeChatPublicFeedCatalog] = [],
+        weChatPublicHTTP: any ConnectorHTTPClient = AnonymousPublicWeChatHTTPClient(),
         imapTransport: (any IMAPSessionTransport)? = nil,
         gmailTransport: (any IMAPSessionTransport)? = nil,
         http: any ConnectorHTTPClient = URLSessionConnectorHTTPClient()
@@ -16,7 +18,7 @@ public enum ConnectorCatalog {
         await registry.register(HackerNewsConnector(http: http))
         await registry.register(RedditConnector(http: http))
         await registry.register(BlueskyConnector(http: http))
-        await registry.register(WeChatConnector(provider: weChatProvider))
+        await registry.register(WeChatConnector(provider: weChatProvider, catalogs: weChatCatalogs, publicHTTP: weChatPublicHTTP))
         for platform in AuthenticatedCreatorPlatform.allCases {
             await registry.register(AuthenticatedCreatorConnector(platform: platform, browser: browser))
         }

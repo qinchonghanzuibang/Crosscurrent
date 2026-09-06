@@ -378,3 +378,40 @@ private func seedItem(_ repository: CrosscurrentRepository, sourceID: SourceID, 
     _ = try await repository.saveItem(item, revision: revision, segments: ItemSegmenter.segments(for: revision))
     return item
 }
+
+@Test func weChatInitialBackfillFromYesterdayStaysOutOfTodayAfterContentEnrichment() async throws {
+    let (repository, _) = try makeRepository()
+    let revision = SourceRevision(sourceID: SourceID(), displayName: "机器之心")
+    let source = LogicalSource(id: revision.sourceID, currentRevisionID: revision.id, kind: .organization)
+    let endpoint = SourceEndpoint(sourceID: source.id, connector: .weChatOfficialAccount, externalID: "wechat-account-biz:QQ==", contentPrivacy: .public)
+    _ = try await repository.saveSource(source, revision: revision, endpoints: [endpoint])
+    let now = Date.now
+    let pipeline = IngestionPipeline(repository: repository)
+    var archived = ConnectorItemCandidate(externalID: "wechat-article:QQ==:100:1",
+        canonicalURL: URL(string: "https://mp.weixin.qq.com/s?__biz=QQ==&mid=100&idx=1"),
+        title: "Initial public feed archive", publishedAt: now.addingTimeInterval(-86_400),
+        contentText: "An existing public article describes calibrated telescope observations, detector design, reproducible measurements and archival astronomy data.", isInitialBackfill: true)
+    _ = try await pipeline.ingest(candidate: archived, sourceID: source.id, endpointID: endpoint.id, fetchedAt: now)
+    _ = try await EvidenceEventMaintainer(repository: repository).run()
+    let initial = try #require(try await TodayCoordinator(repository: repository).update(trigger: .opening, now: now))
+    #expect(initial.revision.entries.isEmpty)
+    #expect(try await repository.currentEventSnapshots().allSatisfy { $0.meaningfulActivityAt == nil })
+
+    archived.isInitialBackfill = false
+    archived.contentText! += " Later content acquisition restores the original publication's image captions and tables."
+    _ = try await pipeline.ingest(candidate: archived, sourceID: source.id, endpointID: endpoint.id, fetchedAt: now.addingTimeInterval(30))
+    _ = try await EvidenceEventMaintainer(repository: repository).run()
+    let enriched = try #require(try await TodayCoordinator(repository: repository).update(trigger: .manualRefresh, now: now.addingTimeInterval(30)))
+    #expect(enriched.revision.entries.isEmpty)
+
+    let fresh = ConnectorItemCandidate(externalID: "wechat-article:QQ==:101:1",
+        canonicalURL: URL(string: "https://mp.weixin.qq.com/s?__biz=QQ==&mid=101&idx=1"),
+        title: "New intercity rail timetable announced", publishedAt: now,
+        contentText: "The regional transport authority announced a new intercity railway timetable with independently verified stopping patterns and accessible ticket information.")
+    _ = try await pipeline.ingest(candidate: fresh, sourceID: source.id, endpointID: endpoint.id, fetchedAt: now.addingTimeInterval(60))
+    _ = try await EvidenceEventMaintainer(repository: repository).run()
+    let current = try #require(try await TodayCoordinator(repository: repository).update(trigger: .manualRefresh, now: now.addingTimeInterval(60)))
+    #expect(current.revision.entries.count == 1)
+    let snapshots = try await repository.currentEventSnapshots()
+    #expect(snapshots.filter { $0.meaningfulActivityAt != nil }.count == 1)
+}

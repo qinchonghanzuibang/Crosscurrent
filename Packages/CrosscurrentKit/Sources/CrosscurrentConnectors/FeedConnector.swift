@@ -150,4 +150,8 @@ public actor FeedConnector: Connector {
     public static func parseItems(data: Data) throws -> [ConnectorItemCandidate] {
         items(from: try Feed(data: data))
     }
+
+    public static func metadata(data: Data) throws -> (title: String, summary: String?) {
+        metadata(from: try Feed(data: data))
+    }
 }

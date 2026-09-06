@@ -53,6 +53,13 @@ public struct WeChatAccountIdentity: Codable, Hashable, Sendable {
         return nil
     }
 
+    /// Durable provider-independent aliases; a name or feed address is never an account identity.
+    public var accountAliases: [String] {
+        [Self.nonempty(ghid).map { "wechat-account:\($0.lowercased())" },
+         Self.nonempty(wxid).map { "wechat-account-wxid:\($0.lowercased())" },
+         Self.nonempty(biz).map { "wechat-account-biz:\($0)" }].compactMap { $0 }
+    }
+
     private static func nonempty(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
         return value

@@ -75,6 +75,19 @@ public actor SourceDiscoveryService {
         }
     }
 
+    /// Broader index search is explicitly submitted separately from free catalog
+    /// search so normal discovery cannot consume a configured provider's quota.
+    public func searchMore(_ query: String, context: ConnectorContext) async throws -> [SourceDiscoveryPreview] {
+        guard let connectors,
+              let connector = await connectors.connector(for: .weChatOfficialAccount) as? WeChatConnector
+        else { throw ConnectorError.temporarilyUnavailable }
+        let normalized = query.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return [] }
+        return try await connector.searchMore(query: normalized, context: context).map {
+            SourceDiscoveryPreview(inputQuery: normalized, connectorKind: .weChatOfficialAccount, result: $0, availableActions: [.subscribe])
+        }
+    }
+
     /// Compatibility entry point for bulk importers. Interactive UI must use
     /// `preview` followed by `commit(_:action:)` so discovery never subscribes
     /// merely because a URL was inspected.
@@ -94,16 +107,23 @@ public actor SourceDiscoveryService {
                 return endpoint
             }
         }
+        // One search may return distinct publishers, including same-name accounts.
+        let publisherIdentity = result.endpoints.flatMap(\.weChatAccountAliases).sorted().first ?? result.source.id.description
+        let publisherKey = preview.connectorKind == .weChatOfficialAccount ? ":publisher:\(publisherIdentity)" : ""
         return try await commit(
             result,
-            idempotencyPrefix: "discover:\(preview.connectorKind.rawValue):\(action.rawValue):\(preview.inputURL?.absoluteString ?? preview.inputQuery ?? result.endpoints.first?.externalID ?? result.source.id.description)"
+            idempotencyPrefix: "discover:\(preview.connectorKind.rawValue):\(action.rawValue):\(preview.inputURL?.absoluteString ?? preview.inputQuery ?? result.endpoints.first?.externalID ?? result.source.id.description)\(publisherKey)"
         )
     }
 
     public func commit(_ result: ConnectorDiscoveryResult, idempotencyPrefix: String) async throws -> SourceDiscoveryCommit {
         if let existing = try await existingSource(matching: result) {
+            if result.endpoints.contains(where: { $0.connector == .weChatOfficialAccount }) {
+                _ = try await repository.attachWeChatEndpoints(result.endpoints, to: existing.source.id)
+            }
+            let endpoints = try await repository.sourceEndpoints(sourceID: existing.source.id)
             var imported = 0
-            if let endpoint = existing.endpoints.first(where: { Self.endpoint($0, matchesAnyIn: result) }) {
+            if let endpoint = endpoints.first(where: { Self.endpoint($0, matchesAnyIn: result) }) {
                 for candidate in result.recentCandidates {
                     let complete = try await articleEnricher.enrich(candidate, connector: endpoint.connector)
                     let value = try await ingestion.ingest(candidate: complete, sourceID: existing.source.id, endpointID: endpoint.id)
@@ -112,18 +132,24 @@ public actor SourceDiscoveryService {
             }
             return SourceDiscoveryCommit(
                 sourceID: existing.source.id,
-                endpointIDs: existing.endpoints.map(\.id),
+                endpointIDs: endpoints.map(\.id),
                 importedItems: imported
             )
         }
-        _ = try await repository.saveSource(
-            result.source,
-            revision: result.sourceRevision,
-            endpoints: result.endpoints,
-            aiClassification: result.aiClassification,
-            coverage: result.coverageCandidate,
-            idempotencyKey: "\(idempotencyPrefix):source"
-        )
+        do {
+            _ = try await repository.saveSource(
+                result.source,
+                revision: result.sourceRevision,
+                endpoints: result.endpoints,
+                aiClassification: result.aiClassification,
+                coverage: result.coverageCandidate,
+                idempotencyKey: "\(idempotencyPrefix):source"
+            )
+        } catch CrosscurrentStorageError.sourceIdentityConflict {
+            // Another foreground/import task won after our preview lookup. Its
+            // Source is canonical; reread and attach this qualified acquisition.
+            return try await commit(result, idempotencyPrefix: idempotencyPrefix)
+        }
         for entity in result.entityCandidates {
             let revision = EntityRevision(
                 id: entity.currentRevisionID,
@@ -168,6 +194,8 @@ public actor SourceDiscoveryService {
         let canonical = endpoint.canonicalURL.map(URLNormalizer.canonicalize)?.absoluteString
         return result.endpoints.contains { discovered in
             guard discovered.connector == endpoint.connector else { return false }
+            if endpoint.connector == .weChatOfficialAccount,
+               !endpoint.weChatAccountAliases.isDisjoint(with: discovered.weChatAccountAliases) { return true }
             let sameExternalID = !discovered.externalID.isEmpty && discovered.externalID == endpoint.externalID
             let discoveredCanonical = discovered.canonicalURL.map(URLNormalizer.canonicalize)?.absoluteString
             return sameExternalID || (discoveredCanonical != nil && discoveredCanonical == canonical)
@@ -175,6 +203,7 @@ public actor SourceDiscoveryService {
     }
 
     private static func connectorOrder(for url: URL) -> [ConnectorKind] {
+        if WeChatCatalogID.allCases.contains(where: { $0.accepts(feedURL: url) }) { return [.weChatOfficialAccount] }
         let host = url.host?.lowercased() ?? ""
         if host == "mp.weixin.qq.com" || host.hasSuffix(".weixin.qq.com") { return [.weChatOfficialAccount] }
         if host == "xiaohongshu.com" || host.hasSuffix(".xiaohongshu.com") || host == "xhslink.com" { return [.xiaohongshu] }
