@@ -5,7 +5,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var tab = "General"
     @State private var selectedPromptTask: AITask = .eventSynthesis
     @State private var promptOverride = ""
     @State private var promptStatus = ""
@@ -21,7 +20,7 @@ struct SettingsView: View {
     @State private var confirmsDeleteAll = false
 
     var body: some View {
-        TabView(selection: $tab) {
+        TabView(selection: $model.settingsTab) {
             Form {
                 DatePicker(
                     "Daily briefing",
@@ -55,6 +54,8 @@ struct SettingsView: View {
                 LabeledContent("Authenticated Browser Sessions", value: model.browserWorkerState)
                 Button("Enable Browser Session Owner") { enableBrowserWorker() }
                 Section("Advanced WeChat Index") {
+                    Text("Public WeChat feeds work without configuration. An optional index provider expands account coverage beyond the built-in public catalogs.")
+                        .font(.caption).foregroundStyle(.secondary)
                     LabeledContent("Direct provider", value: "Jizhila · BYOK")
                     LabeledContent("Status", value: model.weChatIndexStatus)
                     SecureField("API key", text: $weChatAPIKey)
@@ -71,7 +72,7 @@ struct SettingsView: View {
                             }
                         }
                     }
-                    Text("The key stays in Keychain. Official Account search and history requests are paid provider calls; Crosscurrent never uses WeChat login, QR codes, or browser sessions.")
+                    Text("The key stays in Keychain. Search More and fallback requests may use paid provider calls. Crosscurrent uses public feeds first and never requires a WeChat login.")
                         .font(.caption).foregroundStyle(.secondary)
                     if !weChatConfigurationStatus.isEmpty {
                         Text(weChatConfigurationStatus).font(.caption).foregroundStyle(.secondary)

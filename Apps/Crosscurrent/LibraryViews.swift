@@ -88,7 +88,7 @@ private struct AllFollowingView: View {
             List {
                 if !sources.isEmpty {
                     Section("Sources") { ForEach(sources) { source in
-                        HStack { SourceMonogram(source.revision.displayName, size: 30); Text(source.revision.displayName); Spacer(); Text(source.endpoints.first?.connector.rawValue ?? "").font(.caption).foregroundStyle(.secondary) }
+                        HStack { SourceMonogram(source.revision.displayName, size: 30); Text(source.revision.displayName); Spacer(); Text(source.endpoints.contains { $0.connector == .weChatOfficialAccount } ? String(localized: "WeChat Official Account") : source.endpoints.first?.connector.rawValue ?? "").font(.caption).foregroundStyle(.secondary) }
                     } }
                 }
                 if !people.isEmpty {
@@ -110,6 +110,7 @@ struct SourcesView: View {
     var embedded = false
     var followedOnly = false
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openSettings) private var openSettings
     @State private var adding = false
     @State private var url = ""
     @State private var status = ""
@@ -119,6 +120,7 @@ struct SourcesView: View {
     @State private var exportDocument = OPMLExportDocument(data: Data())
     @State private var selectedStarterURLs: Set<String> = []
     @State private var discoveryTask: Task<Void, Never>?
+    @State private var diagnosticSource: StoredSourceSnapshot?
     private var visibleSources: [StoredSourceSnapshot] {
         followedOnly ? model.sources.filter(\.source.isFollowed) : model.sources
     }
@@ -165,31 +167,33 @@ struct SourcesView: View {
                         SourceMonogram(snapshot.revision.displayName, size: 34)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(snapshot.revision.displayName).font(.headline)
-                            Text("\(snapshot.source.kind.displayName) · \(snapshot.endpoints.map { $0.connector.rawValue }.joined(separator: " · "))").font(.caption).foregroundStyle(.secondary)
+                            Text(isWeChat(snapshot) ? String(localized: "WeChat Official Account") : "\(snapshot.source.kind.displayName) · \(snapshot.endpoints.map { $0.connector.rawValue }.joined(separator: " · "))").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
                         VStack(alignment: .trailing, spacing: 8) {
-                            if let endpoint = snapshot.endpoints.first,
-                               let health = model.endpointHealth[endpoint.id] {
+                            if let health = logicalHealth(snapshot) {
                                 Text(endpointHealthSummary(health))
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                     .multilineTextAlignment(.trailing)
-                                if let message = health.lastFailureMessage, [.authenticationRequired, .platformChanged, .configurationRequired, .error, .temporarilyUnavailable].contains(health.health) {
+                                if !isWeChat(snapshot), let message = health.lastFailureMessage, [.authenticationRequired, .platformChanged, .configurationRequired, .error, .temporarilyUnavailable].contains(health.health) {
                                     Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
                                 }
                                 if [.authenticationRequired, .platformChanged, .configurationRequired, .error, .temporarilyUnavailable].contains(health.health) {
-                                    StatusPill(health.health.displayName, color: .orange)
+                                    StatusPill(isWeChat(snapshot) ? String(localized: "Updates temporarily unavailable") : health.health.displayName, color: .orange)
                                 }
                             }
                             HStack(spacing: 8) {
                                 Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh(snapshot) } }
                                     .labelStyle(.iconOnly)
                                     .help("Refresh Source")
-                                if let endpoint = snapshot.endpoints.first(where: { $0.health == .authenticationRequired || $0.health == .platformChanged }) {
+                                if !isWeChat(snapshot), let endpoint = snapshot.endpoints.first(where: { $0.health == .authenticationRequired || $0.health == .platformChanged }) {
                                     Button("Reconnect") { Task { await model.reconnect(endpoint) } }
                                 }
                                 Menu {
+                                    if isWeChat(snapshot) {
+                                        Button("Acquisition details…") { diagnosticSource = snapshot }
+                                    }
                                     if let endpoint = snapshot.endpoints.first(where: { $0.accountID != nil }) {
                                         Button("Capture redacted diagnostic") { Task { await model.capturePlatformDiagnostic(endpoint) } }
                                         Button("Remove browser session", role: .destructive) { Task { await model.removeBrowserSession(endpoint) } }
@@ -216,8 +220,14 @@ struct SourcesView: View {
                 TextField("Official Account name or Source URL", text: $url)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { submitDiscovery() }
+                    .disabled(model.sourceFollowInProgress)
                 Text("Search an Official Account by name, or paste a feed, creator, repository, webpage, or public WeChat article URL. Searches run only when you submit.")
                     .font(.caption).foregroundStyle(.secondary)
+                if model.sourceFollowInProgress {
+                    ProgressView("Following and fetching recent articles…")
+                        .padding(.vertical, 18)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 if !model.sourceSearchResults.isEmpty {
                     ScrollView {
                         LazyVStack(spacing: 10) {
@@ -232,11 +242,13 @@ struct SourcesView: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text(result.result.sourceRevision.displayName).font(.headline)
-                                        if let identity = result.result.display?.identity { Text(identity).font(.caption).foregroundStyle(.secondary) }
-                                        Text(result.result.display?.detail ?? result.result.sourceRevision.summary ?? String(localized: "WeChat Official Account"))
-                                            .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                                        Text(result.result.display?.category == "WeChat Official Account" ? String(localized: "WeChat Official Account") : result.result.display?.category ?? String(localized: "WeChat Official Account"))
-                                            .font(.caption2).foregroundStyle(.tertiary)
+                                        if result.connectorKind == .weChatOfficialAccount {
+                                            Text("WeChat Official Account").font(.caption).foregroundStyle(.secondary)
+                                        } else {
+                                            if let identity = result.result.display?.identity { Text(identity).font(.caption).foregroundStyle(.secondary) }
+                                            Text(result.result.display?.detail ?? result.result.sourceRevision.summary ?? "")
+                                                .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                                        }
                                     }
                                     Spacer()
                                     Button("Follow") {
@@ -247,6 +259,7 @@ struct SourcesView: View {
                                         }
                                     }
                                     .buttonStyle(.borderedProminent)
+                                    .disabled(model.sourceDiscoveryInProgress)
                                 }
                                 .padding(10)
                                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -255,7 +268,21 @@ struct SourcesView: View {
                     }
                     .frame(maxHeight: 280)
                 }
-                if model.sourcePreview == nil && model.sourceSearchResults.isEmpty {
+                if let submittedQuery = model.sourceSearchQuery, model.sourcePreview == nil {
+                    Button("Search more WeChat accounts…") {
+                        discoveryTask?.cancel()
+                        discoveryTask = Task { status = await model.searchMoreWeChatSources() }
+                    }
+                    .disabled(model.sourceDiscoveryInProgress || submittedQuery != url.trimmingCharacters(in: .whitespacesAndNewlines))
+                    if model.searchMoreNeedsConfiguration {
+                        Button("Open Advanced WeChat settings…") {
+                            model.settingsTab = "General"
+                            dismissAddSource()
+                            openSettings()
+                        }
+                    }
+                }
+                if model.sourcePreview == nil && model.sourceSearchResults.isEmpty && model.sourceSearchQuery == nil && !model.sourceFollowInProgress {
                     GroupBox("Optional starter Sources") {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(Self.starterSources, id: \.url) { starter in
@@ -292,7 +319,7 @@ struct SourcesView: View {
                             Text(preview.result.sourceRevision.displayName).font(.headline)
                             Text(preview.result.sourceRevision.summary ?? preview.inputURL?.absoluteString ?? preview.inputQuery ?? "")
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                            Text(preview.result.display?.category ?? "\(preview.connectorKind.rawValue) · \(preview.result.recentCandidates.count) recent samples")
+                            Text(preview.connectorKind == .weChatOfficialAccount ? String(localized: "WeChat Official Account") : preview.result.display?.category ?? "\(preview.connectorKind.rawValue) · \(preview.result.recentCandidates.count) recent samples")
                                 .font(.caption2).foregroundStyle(.tertiary)
                         }
                     }
@@ -305,7 +332,7 @@ struct SourcesView: View {
                         .pickerStyle(.segmented)
                     }
                 }
-                if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary) }
+                if !status.isEmpty && !model.sourceFollowInProgress { Text(status).font(.caption).foregroundStyle(.secondary) }
                 if model.pendingPlatformCapture != nil {
                     Button("Capture redacted platform diagnostic", systemImage: "waveform.path.ecg.rectangle") {
                         Task { status = await model.capturePendingPlatformDiagnostic() }
@@ -316,12 +343,14 @@ struct SourcesView: View {
                 HStack {
                     Spacer()
                     Button("Cancel") { model.clearSourcePreview(); dismissAddSource() }
+                        .disabled(model.sourceFollowInProgress)
                     if model.sourcePreview == nil {
                         Button(isSubmittedURL ? "Preview" : "Search") { submitDiscovery() }
                             .keyboardShortcut(.defaultAction)
                             .disabled(url.isEmpty || model.sourceDiscoveryInProgress)
                     } else {
                         Button("Back") { model.clearSourcePreview(); status = "" }
+                            .disabled(model.sourceFollowInProgress)
                         Button(selectedAction.commitLabel) {
                             Task {
                                 status = await model.subscribeSourcePreview(action: selectedAction)
@@ -333,6 +362,11 @@ struct SourcesView: View {
                     }
                 }
             }.padding(24).frame(width: 620)
+                .interactiveDismissDisabled(model.sourceFollowInProgress)
+        }
+        .sheet(item: $diagnosticSource) { snapshot in
+            WeChatAcquisitionDetails(snapshot: snapshot)
+                .environmentObject(model)
         }
         .fileImporter(isPresented: $importingOPML, allowedContentTypes: [.xml, .data], allowsMultipleSelection: false) { result in
             guard case let .success(urls) = result, let selected = urls.first else {
@@ -361,10 +395,27 @@ struct SourcesView: View {
         discoveryTask?.cancel()
         let input = url.trimmingCharacters(in: .whitespacesAndNewlines)
         discoveryTask = Task {
-            if isSubmittedURL { status = await model.previewSource(input) }
+            if isSubmittedURL { model.clearSourcePreview(); status = await model.previewSource(input) }
             else { status = await model.searchSources(input) }
             selectedAction = model.sourcePreview?.availableActions.first ?? .subscribe
         }
+    }
+
+    private func isWeChat(_ snapshot: StoredSourceSnapshot) -> Bool {
+        snapshot.endpoints.contains { $0.connector == .weChatOfficialAccount }
+    }
+
+    private func logicalHealth(_ snapshot: StoredSourceSnapshot) -> StoredEndpointHealth? {
+        let health = snapshot.endpoints.compactMap { model.endpointHealth[$0.id] }
+        guard isWeChat(snapshot) else { return health.first }
+        // A successful alternate keeps the publisher available even when its
+        // primary endpoint or optional index provider needs attention.
+        let healthy = health.filter { $0.health == .healthy }
+        let available = healthy.isEmpty ? health.filter { [.syncing, .retrying].contains($0.health) } : healthy
+        var logical = available
+            .max { ($0.lastSuccess ?? .distantPast) < ($1.lastSuccess ?? .distantPast) } ?? health.first
+        logical?.itemCount = health.reduce(0) { $0 + $1.itemCount }
+        return logical
     }
 
     private static let starterSources = [
@@ -378,11 +429,63 @@ struct SourcesView: View {
 private func endpointHealthSummary(_ health: StoredEndpointHealth) -> String {
     let formatter = RelativeDateTimeFormatter()
     var parts: [String] = []
-    if let success = health.lastSuccess { parts.append("Last synced \(formatter.localizedString(for: success, relativeTo: .now))") }
-    else if let attempt = health.lastAttempt { parts.append("Last tried \(formatter.localizedString(for: attempt, relativeTo: .now))") }
+    if let success = health.lastSuccess { parts.append(String.localizedStringWithFormat(String(localized: "Last updated %@"), formatter.localizedString(for: success, relativeTo: .now))) }
+    else if let attempt = health.lastAttempt { parts.append(String.localizedStringWithFormat(String(localized: "Last tried %@"), formatter.localizedString(for: attempt, relativeTo: .now))) }
     if health.health == .retrying || health.health == .rateLimited { parts.append(String(localized: "Retrying…")) }
     parts.append(String.localizedStringWithFormat(String(localized: "%lld Items"), health.itemCount))
     return parts.joined(separator: " · ")
+}
+
+private struct WeChatAcquisitionDetails: View {
+    let snapshot: StoredSourceSnapshot
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    private var current: StoredSourceSnapshot { model.sources.first { $0.id == snapshot.id } ?? snapshot }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(current.revision.displayName).font(.title2.bold())
+            Text("Acquisition details").font(.subheadline).foregroundStyle(.secondary)
+            ForEach(current.endpoints.sorted { ($0.weChatAcquisition?.priority ?? 100) < ($1.weChatAcquisition?.priority ?? 100) }) { endpoint in
+                let health = model.endpointHealth[endpoint.id]
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledContent(providerName(endpoint), value: health?.health.displayName ?? endpoint.health.displayName)
+                        if let success = health?.lastSuccess ?? endpoint.lastSuccessfulSync {
+                            LabeledContent("Last success", value: success.formatted(date: .abbreviated, time: .shortened))
+                        }
+                        if let attempt = health?.lastAttempt ?? endpoint.weChatAcquisition?.lastAttempt {
+                            LabeledContent("Last attempt", value: attempt.formatted(date: .abbreviated, time: .shortened))
+                        }
+                        if let audit = endpoint.weChatAcquisition?.lastAudit {
+                            LabeledContent("Last secondary audit", value: audit.formatted(date: .abbreviated, time: .shortened))
+                        }
+                        if let message = health?.lastFailureMessage, health?.health != .healthy {
+                            Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(4)
+                }
+            }
+            if !current.endpoints.contains(where: { $0.weChatAcquisition?.providerID == "jizhila" || $0.weChatAcquisition == nil }) {
+                LabeledContent("Jizhila", value: model.weChatIndexConfigured ? String(localized: "Available as fallback") : String(localized: "Not configured"))
+            }
+            HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+        }
+        .padding(24)
+        .frame(width: 480)
+    }
+
+    private func providerName(_ endpoint: SourceEndpoint) -> String {
+        switch endpoint.weChatAcquisition?.providerID {
+        case "wechat2rss": "Wechat2RSS"
+        case "bestBlogs", "bestblogs": "BestBlogs"
+        case "jizhila", nil: "Jizhila"
+        default: endpoint.weChatAcquisition?.providerID ?? ""
+        }
+    }
 }
 
 private struct OPMLExportDocument: FileDocument {
@@ -572,30 +675,51 @@ struct LibraryObjectDetailView: View {
 struct ItemDetailView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showOriginal = false
+    @State private var activatedLink: URL?
     var body: some View {
         if let item = model.selectedItemDetail {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if item.isHistorical { StatusPill("Historical revision", color: .secondary) }
-                    Text(item.title).font(.system(size: 34, weight: .bold, design: .serif))
-                    Text([item.sourceName, item.author].compactMap { $0 }.joined(separator: " · ")).foregroundStyle(.secondary)
-                    if let publishedAt = item.publishedAt { Text(publishedAt, style: .date).font(.caption).foregroundStyle(.secondary) }
-                    Divider()
-                    Text(item.text).textSelection(.enabled).lineSpacing(4)
+            VStack(spacing: 0) {
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if item.isHistorical { StatusPill("Historical revision", color: .secondary) }
+                        Text(item.author.map { $0 == item.sourceName ? item.sourceName : "\(item.sourceName) · \($0)" } ?? item.sourceName)
+                            .foregroundStyle(.secondary).lineLimit(2)
+                        if let publishedAt = item.publishedAt { Text(publishedAt, style: .date).font(.caption).foregroundStyle(.secondary) }
+                    }
+                    Spacer()
                     if let url = item.canonicalURL {
                         Button("Open original") {
                             if let accountID = item.originalAccountID {
                                 Task { await model.openAuthenticatedOriginal(url: url, accountID: accountID) }
                             } else {
+                                activatedLink = nil
                                 showOriginal = true
                             }
                         }
                     }
                 }
-                .padding(28).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
+                .padding(.horizontal, 24).padding(.vertical, 14)
+                Divider()
+                if let html = item.sanitizedHTML, !html.isEmpty {
+                    ReaderWebView(
+                        document: ReaderDocument(id: item.revisionID.description, title: item.title, byline: item.sourceName, sanitizedHTML: html, baseURL: item.canonicalURL, itemRevisionID: item.revisionID),
+                        activatedLink: $activatedLink
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            Text(item.title).font(.system(size: 34, weight: .bold, design: .serif))
+                            Text(item.text).textSelection(.enabled).lineSpacing(4)
+                        }
+                        .padding(28).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
+                    }
+                }
             }
-            .sheet(isPresented: $showOriginal) {
-                if let url = item.canonicalURL { PublicOriginalWebView(url: url).frame(minWidth: 900, minHeight: 650) }
+            .onChange(of: activatedLink) { _, link in if link != nil { showOriginal = true } }
+            .onChange(of: item.revisionID) { _, _ in activatedLink = nil; showOriginal = false }
+            .sheet(isPresented: $showOriginal, onDismiss: { activatedLink = nil }) {
+                if let url = activatedLink ?? item.canonicalURL { PublicOriginalWebView(url: url).frame(minWidth: 900, minHeight: 650) }
             }
         } else {
             ContentUnavailableView("Choose an Item", systemImage: "doc.richtext")
