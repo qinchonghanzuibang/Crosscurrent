@@ -1,12 +1,17 @@
 import CrosscurrentDomain
+import AppKit
 import SwiftUI
 
 public enum CrosscurrentColor {
-    public static let accent = Color(red: 0.78, green: 0.27, blue: 0.16)
+    public static let accent = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 1.0, green: 0.55, blue: 0.40, alpha: 1)
+            : NSColor(srgbRed: 0.72, green: 0.22, blue: 0.12, alpha: 1)
+    })
     public static let warmPaper = Color(red: 0.96, green: 0.94, blue: 0.90)
     public static let ink = Color(red: 0.12, green: 0.13, blue: 0.14)
     public static let muted = Color.secondary.opacity(0.72)
-    public static let update = Color(red: 0.12, green: 0.48, blue: 0.68)
+    public static let update = Color(nsColor: .systemBlue)
 }
 
 public struct StatusPill: View {
@@ -40,6 +45,7 @@ public struct SourceMonogram: View {
             .frame(width: size, height: size)
             .background(CrosscurrentColor.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: size * 0.3))
             .foregroundStyle(CrosscurrentColor.accent)
+            .accessibilityHidden(true)
     }
 }
 
@@ -62,10 +68,24 @@ public struct EventReadMarker: View {
     public var status: RevisionReadStatus
     public init(_ status: RevisionReadStatus) { self.status = status }
     public var body: some View {
+        Group {
+            switch status {
+            case .unread: Circle().fill(CrosscurrentColor.accent).frame(width: 6, height: 6)
+            case .updated: Image(systemName: "arrow.clockwise").font(.system(size: 10, weight: .semibold)).foregroundStyle(CrosscurrentColor.update)
+            case .read: Color.clear
+            }
+        }
+        .frame(width: 12, height: 12)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .help(label)
+    }
+
+    private var label: LocalizedStringKey {
         switch status {
-        case .unread: Circle().fill(CrosscurrentColor.accent).frame(width: 8, height: 8)
-        case .updated: StatusPill(String(localized: "Updated"), color: CrosscurrentColor.update)
-        case .read: Color.clear.frame(width: 8, height: 8)
+        case .unread: "Unread"
+        case .updated: "Updated"
+        case .read: "Already read"
         }
     }
 }

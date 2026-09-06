@@ -12,6 +12,7 @@
 		141CF06A163B0DC2BAAD8CCA /* CrosscurrentUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB8660C54F40EBF25C10619D /* CrosscurrentUITests.swift */; };
 		1CAC03C4AE4017C9C4EC7CED /* FlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1EC027581EDD97CF140AE11 /* FlowView.swift */; };
 		246D1835F305ADC1F4E58477 /* EventDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64945D1269BE0DCA8C9ED616 /* EventDetailView.swift */; };
+		3148C24C620014508D59A728 /* AddSourceSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53295F4462A01266F452AF49 /* AddSourceSheet.swift */; };
 		31A0C1623C139EEE1BD4F675 /* CrosscurrentRanking in Frameworks */ = {isa = PBXBuildFile; productRef = 83FEB083D310CD5F59C820AA /* CrosscurrentRanking */; };
 		423AF7CF97B768330C6DA60D /* CrosscurrentBrowser in Frameworks */ = {isa = PBXBuildFile; productRef = FBE626A77EAA2EC6AEC9BF99 /* CrosscurrentBrowser */; };
 		445FBC648E642CEAB8F79933 /* CrosscurrentConnectors in Frameworks */ = {isa = PBXBuildFile; productRef = C0169C1DCB43C5BFC5B92012 /* CrosscurrentConnectors */; };
@@ -50,6 +51,7 @@
 		EBE378177D7C8A2582FDE7DA /* CrosscurrentConnectors in Frameworks */ = {isa = PBXBuildFile; productRef = DD16C7E6769F0A69BD39D7A3 /* CrosscurrentConnectors */; };
 		EE911B03398F163A72DC2735 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E84B6068F8FCCC1AE522BAE /* RootView.swift */; };
 		F20F9E56CE9CA43E9A3D5A68 /* BrowserWorkerMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED000609D7E7DA9C30318637 /* BrowserWorkerMain.swift */; };
+		FE801308A04FB412F3FF6250 /* EventListRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 444078FD1E6091005AF01275 /* EventListRow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -116,6 +118,8 @@
 		2995505918B7155AD0A43AF9 /* Crosscurrent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Crosscurrent.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		39318958E775B05FC45110A6 /* SearchScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchScreen.swift; sourceTree = "<group>"; };
 		4033E09B86E941E7A8700A52 /* CrosscurrentShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CrosscurrentShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		444078FD1E6091005AF01275 /* EventListRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventListRow.swift; sourceTree = "<group>"; };
+		53295F4462A01266F452AF49 /* AddSourceSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddSourceSheet.swift; sourceTree = "<group>"; };
 		53B40EF21028D172E7E34A05 /* CrosscurrentApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrosscurrentApp.swift; sourceTree = "<group>"; };
 		5DF77AEF2C007117D6412575 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.stringsdict; name = en; path = en.lproj/Localizable.stringsdict; sourceTree = "<group>"; };
 		5E92D9A64B58B55103E28BC8 /* TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayView.swift; sourceTree = "<group>"; };
@@ -204,8 +208,10 @@
 			isa = PBXGroup;
 			children = (
 				EDC2663523155A13944E8797 /* Resources */,
+				53295F4462A01266F452AF49 /* AddSourceSheet.swift */,
 				53B40EF21028D172E7E34A05 /* CrosscurrentApp.swift */,
 				64945D1269BE0DCA8C9ED616 /* EventDetailView.swift */,
+				444078FD1E6091005AF01275 /* EventListRow.swift */,
 				D1EC027581EDD97CF140AE11 /* FlowView.swift */,
 				0B84E6BF2D01F8C9AAAE994F /* LibraryViews.swift */,
 				8E84B6068F8FCCC1AE522BAE /* RootView.swift */,
@@ -554,8 +560,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3148C24C620014508D59A728 /* AddSourceSheet.swift in Sources */,
 				E8AAA958481BEB1C78D4534F /* CrosscurrentApp.swift in Sources */,
 				246D1835F305ADC1F4E58477 /* EventDetailView.swift in Sources */,
+				FE801308A04FB412F3FF6250 /* EventListRow.swift in Sources */,
 				1CAC03C4AE4017C9C4EC7CED /* FlowView.swift in Sources */,
 				779303FA69D90F14060DB0F5 /* LibraryViews.swift in Sources */,
 				EE911B03398F163A72DC2735 /* RootView.swift in Sources */,

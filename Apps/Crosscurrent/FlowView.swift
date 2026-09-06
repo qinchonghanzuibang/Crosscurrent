@@ -5,33 +5,39 @@ import SwiftUI
 
 struct FlowView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var ranked = true
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Flow").font(.largeTitle.bold())
+                Text("Flow").font(.title2.bold())
                 Spacer()
-                Picker("Order", selection: $ranked) {
+                Picker("Order", selection: $model.flowRanked) {
                     Text("Ranked").tag(true)
                     Text("Chronological").tag(false)
-                }.pickerStyle(.segmented).frame(width: 230)
-            }.padding(24)
+                }.pickerStyle(.segmented).labelsHidden().frame(width: 230, alignment: .trailing)
+            }.padding(.horizontal, 24).padding(.vertical, 16)
             Divider()
             if sortedEvents.isEmpty {
                 ContentUnavailableView {
-                    Label("No Events in Flow", systemImage: "line.3.horizontal.decrease")
+                    Label("No stories yet", systemImage: "rectangle.stack")
                 } description: {
-                    Text("Refresh a Source to ingest evidence; Crosscurrent will cluster supported developments without requiring an AI provider.")
+                    Text("Add a source to start reading, or refresh your sources for new stories.")
                 } actions: { Button("Add Source") { model.showAddSource() } }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(sortedEvents) { event in
-                    Button { model.open(event) } label: { FlowEventRow(event: event, isSaved: model.savedEventIDs.contains(event.id)) }
+                    Button { model.open(event) } label: { EventListRow(event: event, isSaved: model.savedEventIDs.contains(event.id)) }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("flow-event-\(event.id.description)")
                         .contextMenu {
                             Button(model.savedEventIDs.contains(event.id) ? "Remove from Saved" : "Save Event") { model.toggleSaved(event) }
                             Button("Mark Unread") { model.setEventUnread(event) }
+                            if !event.reasons.isEmpty {
+                                Divider()
+                                Menu("Why this story?") {
+                                    ForEach(event.reasons, id: \.self) { Text(eventRankingReasonLabel($0)) }
+                                }
+                            }
                         }
                 }.listStyle(.inset)
             }
@@ -40,55 +46,9 @@ struct FlowView: View {
 
     private var sortedEvents: [EventCardModel] {
         model.events.sorted {
-            if ranked, $0.score != $1.score { return $0.score > $1.score }
+            if model.flowRanked, $0.score != $1.score { return $0.score > $1.score }
             if $0.date != $1.date { return $0.date > $1.date }
             return $0.id.description < $1.id.description
         }
-    }
-}
-
-private struct FlowEventRow: View {
-    var event: EventCardModel
-    var isSaved: Bool
-    var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            EventReadMarker(event.readStatus).frame(minWidth: 12, alignment: .leading)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(event.title).font(.headline).lineLimit(2)
-                Text(event.summary).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                HStack(spacing: 7) {
-                    Text(event.primarySource).font(.caption.weight(.semibold))
-                    Text(Self.sourceCount(event.sourceCount)).font(.caption).foregroundStyle(.secondary)
-                    ForEach(event.topics.prefix(2), id: \.self) { StatusPill($0, color: .secondary) }
-                }
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 5) {
-                Text(event.date, style: .relative).font(.caption).foregroundStyle(.secondary)
-                Text(event.reasons.first.map(reasonText) ?? String(localized: "Ranked")).font(.caption2).foregroundStyle(CrosscurrentColor.accent)
-                if isSaved { Image(systemName: "bookmark.fill").font(.caption).foregroundStyle(CrosscurrentColor.accent) }
-            }
-        }.padding(.vertical, 10)
-    }
-
-    private func reasonText(_ reason: RankingReason) -> String {
-        switch reason {
-        case .followedSource: String(localized: "Followed source")
-        case .followedPerson: String(localized: "Person you follow")
-        case .followedTopic: String(localized: "Topic you follow")
-        case .primarySource: String(localized: "Primary source")
-        case .independentCoverage: String(localized: "Independent coverage")
-        case .rapidGrowth: String(localized: "Growing quickly")
-        case .novelDevelopment: String(localized: "New development")
-        case .chinaGlobalCoverage: String(localized: "Cross-ecosystem")
-        case .savedRelationship: String(localized: "Related to saved")
-        case .freshPublication: String(localized: "Fresh publication")
-        case .materialUpdate: String(localized: "Material update")
-        case .readingValue: String(localized: "Worth reading")
-        }
-    }
-
-    private static func sourceCount(_ count: Int) -> String {
-        "· " + String.localizedStringWithFormat(String(localized: "%lld sources"), count)
     }
 }

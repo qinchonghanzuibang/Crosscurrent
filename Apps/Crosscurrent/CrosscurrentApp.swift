@@ -12,6 +12,7 @@ import CrosscurrentSearch
 import CrosscurrentStorage
 import AppKit
 import ServiceManagement
+import Security
 import Sparkle
 import SwiftUI
 
@@ -67,6 +68,7 @@ struct CrosscurrentApp: App {
         Settings {
             SettingsView()
                 .environmentObject(model)
+                .preferredColorScheme(Self.fixtureColorScheme)
                 .frame(width: 720, height: 540)
         }
     }
@@ -89,6 +91,12 @@ struct CrosscurrentApp: App {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var selection: SidebarDestination? = .today
+    @Published var flowRanked = true
+    @Published var searchQuery = ""
+    @Published var searchFacet = "All"
+    @Published var searchIncludesHistory = false
+    @Published var searchResults: [SearchResult] = []
+    @Published var todayEverythingExpanded = false
     @Published var selectedEventID: EventID?
     @Published var selectedEvent: EventCardModel?
     @Published private(set) var isReady = false
@@ -97,6 +105,7 @@ final class AppModel: ObservableObject {
     @Published var activityMessage: String?
     @Published var selectedItemDetail: StoredItemDetail?
     @Published var itemReturnDestination: SidebarDestination = .search
+    @Published var libraryReturnDestination: SidebarDestination = .following
     @Published var selectedLibraryStableID: String?
     @Published var selectedLibraryResultKind: SearchDocumentKind?
     @Published var presentsAddSource = false
@@ -109,6 +118,7 @@ final class AppModel: ObservableObject {
     @Published var sourceDiscoveryInProgress = false
     @Published var sourceFollowInProgress = false
     @Published var settingsTab = "General"
+    @Published var settingsShowsWeChat = false
     @Published var weChatIndexConfigured = false
     @Published var weChatIndexStatus = String(localized: "Not configured")
     @Published var digestRevisionReason: DigestRevisionReason = .initialDaily
@@ -322,6 +332,7 @@ final class AppModel: ObservableObject {
     }
 
     func openLibraryObject(_ id: String, kind: SearchDocumentKind) {
+        if let selection, selection != .libraryDetail { libraryReturnDestination = selection }
         selectedLibraryStableID = id
         selectedLibraryResultKind = kind
         selection = .libraryDetail
@@ -453,18 +464,8 @@ final class AppModel: ObservableObject {
                 )
                 if selectedItemDetail != nil { selection = .itemDetail }
             } catch { startupError = error.localizedDescription }
-        case .source:
-            selectedLibraryStableID = result.stableID
-            selectedLibraryResultKind = result.kind
-            selection = .libraryDetail
-        case .person, .organization:
-            selectedLibraryStableID = result.stableID
-            selectedLibraryResultKind = result.kind
-            selection = .libraryDetail
-        case .topic:
-            selectedLibraryStableID = result.stableID
-            selectedLibraryResultKind = result.kind
-            selection = .libraryDetail
+        case .source, .person, .organization, .topic:
+            openLibraryObject(result.stableID, kind: result.kind)
         }
     }
 
@@ -707,10 +708,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func saveProvider(kind: String, endpoint: String, model: String, secret: String) async -> String {
-        guard let repository, let url = URL(string: endpoint), !model.isEmpty else { return String(localized: "Enter a valid endpoint and model.") }
+    func saveProvider(kind: String, endpoint: String, model: String, secret: String) async -> (message: String, succeeded: Bool) {
+        guard let repository, let url = URL(string: endpoint), !model.isEmpty else { return (String(localized: "Enter a valid endpoint and model."), false) }
         do { try AIEndpointSecurity.validate(url) }
-        catch { return error.localizedDescription }
+        catch { return (error.localizedDescription, false) }
         do {
             let existing = providerConfigurations.first(where: { $0.kind == kind })
             let id = existing?.id ?? "\(kind)-\(UUID().uuidString.lowercased())"
@@ -750,12 +751,12 @@ final class AppModel: ObservableObject {
             providerConfigured = true
             if fastProviderID == nil { await setProviderRoute(.fast, providerID: id) }
             if reasoningProviderID == nil { await setProviderRoute(.reasoning, providerID: id) }
-            return String(localized: "Provider configuration saved. Secrets remain in Keychain.")
-        } catch { startupError = error.localizedDescription; return error.localizedDescription }
+            return (String(localized: "Provider configuration saved. Secrets remain in Keychain."), true)
+        } catch { return (error.localizedDescription, false) }
     }
 
-    func saveWeChatIndex(apiKey: String, verificationCode: String) async -> String {
-        guard let weChatKeychain else { return String(localized: "Storage is not ready") }
+    func saveWeChatIndex(apiKey: String, verificationCode: String) async -> (message: String, succeeded: Bool) {
+        guard let weChatKeychain else { return (String(localized: "Storage is not ready"), false) }
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let code = verificationCode.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
@@ -764,18 +765,18 @@ final class AppModel: ObservableObject {
                 try await weChatKeychain.remove(account: Self.weChatVerifyCodeAccount)
                 weChatIndexConfigured = false
                 weChatIndexStatus = String(localized: "Not configured")
-                return String(localized: "WeChat Index configuration removed.")
+                return (String(localized: "WeChat Index configuration removed."), true)
             }
             try await weChatKeychain.put(Data(key.utf8), account: Self.weChatAPIKeyAccount)
             if code.isEmpty { try await weChatKeychain.remove(account: Self.weChatVerifyCodeAccount) }
             else { try await weChatKeychain.put(Data(code.utf8), account: Self.weChatVerifyCodeAccount) }
             weChatIndexConfigured = await weChatProvider?.healthCheck() == .configured
             weChatIndexStatus = weChatIndexConfigured ? String(localized: "Configured") : String(localized: "Configuration unavailable")
-            return String(localized: "WeChat Index configuration saved in Keychain.")
+            return (String(localized: "WeChat Index configuration saved in Keychain."), true)
         } catch {
             weChatIndexConfigured = false
             weChatIndexStatus = error.localizedDescription
-            return error.localizedDescription
+            return (error.localizedDescription, false)
         }
     }
 
@@ -813,6 +814,15 @@ final class AppModel: ObservableObject {
         guard let url = URL(string: endpoint), !model.isEmpty else { return String(localized: "Enter a valid endpoint and model.") }
         do {
             try AIEndpointSecurity.validate(url)
+            var secret = secret
+            if secret.isEmpty,
+               let saved = providerConfigurations.first(where: { $0.kind == kind }),
+               let settings = try? JSONDecoder().decode(AIProviderSettings.self, from: saved.configuration),
+               settings.endpoint == url,
+               let account = saved.keychainReference.flatMap({ String(data: $0, encoding: .utf8) }),
+               let data = try await keychain.data(account: account) {
+                secret = String(data: data, encoding: .utf8) ?? ""
+            }
             let provider: any AIProvider
             switch kind {
             case "openai": provider = OpenAIResponsesProvider(id: "connection-test", apiKey: secret, endpoint: url)
@@ -1159,11 +1169,11 @@ final class AppModel: ObservableObject {
         var added = 0
         var failed = 0
         for value in urls {
-            let preview = await previewSource(value)
+            _ = await previewSource(value)
             guard sourcePreview != nil else { failed += 1; continue }
-            let result = await subscribeSourcePreview(action: .subscribe)
+            _ = await subscribeSourcePreview(action: .subscribe)
             if sourcePreview == nil { added += 1 }
-            else { failed += 1; startupError = preview + " " + result }
+            else { failed += 1 }
         }
         return String.localizedStringWithFormat(String(localized: "Added %lld starter Sources; %lld need attention."), added, failed)
     }
@@ -1185,7 +1195,6 @@ final class AppModel: ObservableObject {
         guard !normalized.isEmpty else { return String(localized: "Enter an Official Account name.") }
         let requestID = UUID()
         discoveryRequestID = requestID
-        startupError = nil
         sourceDiscoveryInProgress = true
         defer { if discoveryRequestID == requestID { sourceDiscoveryInProgress = false } }
         do {
@@ -1232,7 +1241,6 @@ final class AppModel: ObservableObject {
         } catch {
             guard !Task.isCancelled, discoveryRequestID == requestID else { return "" }
             if !more { sourceSearchResults = [] }
-            startupError = error.localizedDescription
             return error.localizedDescription
         }
     }
@@ -1246,7 +1254,6 @@ final class AppModel: ObservableObject {
         let requestID = UUID()
         discoveryRequestID = requestID
         sourcePreview = nil
-        startupError = nil
         guard let url = URL(string: input), let discoveryService else {
             sourceDiscoveryInProgress = false
             return String(localized: "Enter a valid Source URL.")
@@ -1266,7 +1273,7 @@ final class AppModel: ObservableObject {
                     pendingPlatformCapture = .init(platform: platform, accountID: created, url: url, kind: .discovery)
                     _ = try await repository?.saveConnectorAccount(id: created, kind: platform.connectorKind, browserProfileID: created.rawValue)
                     try await browserClient?.authenticate(platform: platform, accountID: created, allowsInteraction: true)
-                    return String(localized: "Login window opened. Complete authentication, then choose Add and Refresh again.")
+                    return String(localized: "Complete sign-in in the browser, then choose Preview again.")
                 }
             }
             let preview = try await discoveryService.preview(.init(url: url, accountID: accountID), context: ConnectorContext(allowsUserInteraction: true))
@@ -1277,7 +1284,6 @@ final class AppModel: ObservableObject {
             return String(localized: "Source found. Review it before subscribing.")
         } catch {
             guard !Task.isCancelled, discoveryRequestID == requestID else { return "" }
-            startupError = error.localizedDescription
             return error.localizedDescription
         }
     }
@@ -1302,7 +1308,7 @@ final class AppModel: ObservableObject {
                 try await reloadCanonicalEvents()
             }
             return selectedAction == .importOnce ? String(localized: "Page imported.") : String(localized: "Source added and refreshed.")
-        } catch { startupError = error.localizedDescription; return error.localizedDescription }
+        } catch { return error.localizedDescription }
     }
 
     func clearSourcePreview() {
@@ -1313,6 +1319,38 @@ final class AppModel: ObservableObject {
         sourceSearchQuery = nil
         searchMoreNeedsConfiguration = false
         pendingPlatformCapture = nil
+    }
+
+    func isFollowing(_ preview: SourceDiscoveryPreview) -> Bool {
+        sources.contains { snapshot in
+            snapshot.source.isFollowed && snapshot.endpoints.contains { endpoint in
+                preview.result.endpoints.contains { candidate in
+                    guard candidate.connector == endpoint.connector else { return false }
+                    if endpoint.connector == .weChatOfficialAccount,
+                       !endpoint.weChatAccountAliases.isDisjoint(with: candidate.weChatAccountAliases) { return true }
+                    if !candidate.externalID.isEmpty, candidate.externalID == endpoint.externalID { return true }
+                    guard let existing = endpoint.canonicalURL, let discovered = candidate.canonicalURL else { return false }
+                    return URLNormalizer.canonicalize(existing) == URLNormalizer.canonicalize(discovered)
+                }
+            }
+        }
+    }
+
+    func providerEditorValues(for kind: String) -> (endpoint: String, model: String)? {
+        guard let saved = providerConfigurations.first(where: { $0.kind == kind }),
+              let settings = try? JSONDecoder().decode(AIProviderSettings.self, from: saved.configuration) else { return nil }
+        return (settings.endpoint.absoluteString, settings.model)
+    }
+
+    var supportsBackgroundServices: Bool {
+        guard let teamID = Bundle.main.object(forInfoDictionaryKey: "CrosscurrentTeamIdentifier") as? String,
+              !teamID.isEmpty, let bundleID = Bundle.main.bundleIdentifier else { return false }
+        let identity = CCCodeSigningIdentity(teamID: teamID, bundleID: bundleID, signingMode: CCSigningEnvironment.currentMode)
+        var requirement: SecRequirement?
+        var code: SecCode?
+        guard SecRequirementCreateWithString(identity.requirement as CFString, [], &requirement) == errSecSuccess,
+              SecCodeCopySelf([], &code) == errSecSuccess, let code, let requirement else { return false }
+        return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
 
     func capturePendingPlatformDiagnostic() async -> String {

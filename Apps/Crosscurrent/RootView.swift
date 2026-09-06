@@ -19,7 +19,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .today: "sun.max"
-        case .flow: "line.3.horizontal.decrease"
+        case .flow: "rectangle.stack"
         case .following: "person.crop.circle.badge.checkmark"
         case .saved: "bookmark"
         case .search: "magnifyingglass"
