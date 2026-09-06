@@ -216,6 +216,12 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
+      configs:
+        Debug:
+          CODE_SIGNING_ALLOWED: true
+          CODE_SIGN_IDENTITY: "-"
+          CODE_SIGN_STYLE: Manual
+          ENABLE_HARDENED_RUNTIME: false
     dependencies:
       - target: Crosscurrent
 schemes:

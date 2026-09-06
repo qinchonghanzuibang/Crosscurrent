@@ -409,8 +409,19 @@ import Testing
     let first = try await collector.run(now: start)
     #expect(first.newlyQuarantined == 1)
     #expect(first.deleted == 0)
-    let second = try await collector.run(now: start.addingTimeInterval(61))
+    _ = try await store.put(Data("evidence".utf8), mediaType: "text/plain", retentionClass: .durableEvidence)
+    let renewed = try await collector.run(now: start.addingTimeInterval(61))
+    #expect(renewed.newlyQuarantined == 1 && renewed.deleted == 0)
+    #expect(try await store.data(for: blob) == Data("evidence".utf8))
+    let second = try await collector.run(now: start.addingTimeInterval(122))
     #expect(second.deleted == 1)
+    let restored = try await store.put(Data("evidence".utf8), mediaType: "text/plain", retentionClass: .durableEvidence)
+    #expect(restored.id == blob.id)
+    let url = URL(string: "https://example.com/evidence")!
+    _ = try await repository.saveRawFetch(receipt: .init(safeURL: url, blobID: restored.id, retentionClass: .durableEvidence), requestURL: url, requestHeaders: [:], responseHeaders: [:])
+    #expect(try await collector.run(now: start.addingTimeInterval(120)).deleted == 0)
+    await #expect(throws: CrosscurrentStorageError.invalidStagedData) { try await collector.purgeImmediately(blobID: restored.id) }
+    #expect(try await store.data(for: restored) == Data("evidence".utf8))
 }
 
 @Test func policyPurgeRemovesContentWhileRemoteDeletionRetainsEvidence() async throws {

@@ -2,6 +2,7 @@ import CrosscurrentDomain
 import CrosscurrentStorage
 import ServiceManagement
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
@@ -18,6 +19,8 @@ struct SettingsView: View {
     @State private var weChatConfigurationStatus = ""
     @State private var confirmsCacheClear = false
     @State private var confirmsDeleteAll = false
+    @State private var confirmsRemoveWeChatIndex = false
+    @State private var providerBusy = false
 
     var body: some View {
         TabView(selection: $model.settingsTab) {
@@ -40,7 +43,7 @@ struct SettingsView: View {
                         )
                         Button(role: .destructive) { Task { await model.removeAdditionalBriefing(at: index) } } label: {
                             Image(systemName: "minus.circle")
-                        }.buttonStyle(.borderless)
+                        }.buttonStyle(.borderless).accessibilityLabel("Remove briefing time")
                     }
                 }
                 Button("Add briefing time", systemImage: "plus") { Task { await model.addAdditionalBriefing() } }
@@ -71,6 +74,10 @@ struct SettingsView: View {
                                 weChatVerificationCode = ""
                             }
                         }
+                        .disabled(weChatAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        if model.weChatIndexConfigured {
+                            Button("Remove configuration…", role: .destructive) { confirmsRemoveWeChatIndex = true }
+                        }
                     }
                     Text("The key stays in Keychain. Search More and fallback requests may use paid provider calls. Crosscurrent uses public feeds first and never requires a WeChat login.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -85,8 +92,8 @@ struct SettingsView: View {
             Form {
                 Toggle("Allow configured cloud providers for public content", isOn: Binding(get: { model.publicCloudConsent }, set: { value in Task { await model.setPublicCloudConsent(value) } }))
                 GroupBox("Privacy boundary") { Text("Authenticated and public are independent. Private, restricted, and unknown content stays local unless an explicit compatible policy permits otherwise.").frame(maxWidth: .infinity, alignment: .leading).padding(6) }
-                LabeledContent("Reasoning provider", value: model.providerConfigured ? "Configured" : "Not configured")
-                LabeledContent("Embedding route", value: "Development-selected · multilingual-e5-small / ORT CPU")
+                LabeledContent("Reasoning provider", value: model.providerConfigured ? String(localized: "Configured") : String(localized: "Not configured"))
+                LabeledContent("Embedding route", value: String(localized: "Development-selected · multilingual-e5-small / ORT CPU"))
                 Text(model.embeddingStatus).font(.caption).foregroundStyle(.secondary)
                 Text("Semantic indexing activates only after the pinned model/runtime artifact manifest, checksums, license, and local runtime layout validate. Lexical search remains available without it.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -104,7 +111,7 @@ struct SettingsView: View {
                 }
                 ForEach(model.providerConfigurations) { configuration in
                     VStack(alignment: .leading, spacing: 3) {
-                        LabeledContent(configuration.displayName, value: configuration.health.capitalized)
+                        LabeledContent(configuration.displayName, value: NSLocalizedString(configuration.health.capitalized, comment: "AI provider connection status"))
                         if let checked = configuration.lastCheckedAt {
                             Text("Last checked \(checked.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -137,12 +144,17 @@ struct SettingsView: View {
                 SecureField(providerKind == "ollama" ? "Optional bearer token" : "API key", text: $providerSecret)
                 HStack {
                     Button("Test connection") {
-                        Task { providerStatus = await model.testProvider(kind: providerKind, endpoint: providerEndpoint, model: providerModel, secret: providerSecret) }
+                        Task {
+                            providerBusy = true
+                            defer { providerBusy = false }
+                            providerStatus = await model.testProvider(kind: providerKind, endpoint: providerEndpoint, model: providerModel, secret: providerSecret)
+                        }
                     }
                     Button("Save provider") {
                         Task { providerStatus = await model.saveProvider(kind: providerKind, endpoint: providerEndpoint, model: providerModel, secret: providerSecret); providerSecret = "" }
                     }
-                }
+                    if providerBusy { ProgressView().controlSize(.small) }
+                }.disabled(providerBusy)
                 if !providerStatus.isEmpty { Text(providerStatus).font(.caption).foregroundStyle(.secondary) }
             }.padding().tabItem { Label("AI & Privacy", systemImage: "lock.shield") }.tag("AI")
             Form {
@@ -232,6 +244,12 @@ struct SettingsView: View {
             }
             .tabItem { Label("Data & Storage", systemImage: "internaldrive") }.tag("Data")
         }
+        .formStyle(.grouped)
+        .confirmationDialog("Remove WeChat Index configuration?", isPresented: $confirmsRemoveWeChatIndex) {
+            Button("Remove configuration", role: .destructive) {
+                Task { weChatConfigurationStatus = await model.saveWeChatIndex(apiKey: "", verificationCode: "") }
+            }
+        } message: { Text("Public feeds remain available. Broader search will need an API key again.") }
     }
 
     private func format(_ bytes: Int64) -> String {
@@ -250,7 +268,14 @@ struct SettingsView: View {
     }
 
     private func enableAgent() {
-        do { try CrosscurrentServices.agent.register(); model.backgroundState = String(localized: "Enabled") }
+        do {
+            try CrosscurrentServices.agent.register()
+            model.backgroundState = String(localized: "Enabled")
+            Task {
+                do { _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) }
+                catch { model.startupError = error.localizedDescription }
+            }
+        }
         catch { model.backgroundState = error.localizedDescription }
     }
 

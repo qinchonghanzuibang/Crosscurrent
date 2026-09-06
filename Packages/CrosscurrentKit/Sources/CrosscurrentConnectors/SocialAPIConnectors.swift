@@ -3,6 +3,7 @@ import Foundation
 
 public actor GitHubConnector: Connector {
     public nonisolated let kind: ConnectorKind = .github
+    public nonisolated let cursorScope: ConnectorCursorScope = .refreshPagination
     public nonisolated let capabilities: ConnectorCapabilities = [.discovery, .deltaSync, .pagination, .fullContent, .engagementMetrics, .backgroundRefresh]
     private let http: any ConnectorHTTPClient
 
@@ -76,7 +77,7 @@ public actor GitHubConnector: Connector {
                 metricSnapshots: event.payload?.size.map { [.init(kind: .score, value: Double($0), connectorKey: "commit_count", capturedAt: context.now())] } ?? []
             )
         }
-        return ConnectorRefreshPage(candidates: candidates, nextCursor: try ConnectorCursor(family: "github-page-v1", value: page + 1), reachedEnd: events.count < 50)
+        return ConnectorRefreshPage(candidates: candidates, nextCursor: try ConnectorCursor(family: "github-page-v1", value: page + 1), reachedEnd: events.count < 50 || page >= 6)
     }
 
     public func fetchContent(candidate: ConnectorItemCandidate, context _: ConnectorContext) async throws -> ConnectorItemCandidate { candidate }
@@ -172,6 +173,7 @@ public actor GitHubConnector: Connector {
 
 public actor RedditConnector: Connector {
     public nonisolated let kind: ConnectorKind = .reddit
+    public nonisolated let cursorScope: ConnectorCursorScope = .refreshPagination
     public nonisolated let capabilities: ConnectorCapabilities = [.discovery, .deltaSync, .pagination, .fullContent, .deletionSignals, .engagementMetrics, .backgroundRefresh]
     private let http: any ConnectorHTTPClient
     public init(http: any ConnectorHTTPClient = URLSessionConnectorHTTPClient()) { self.http = http }
@@ -233,6 +235,7 @@ public actor RedditConnector: Connector {
 
 public actor BlueskyConnector: Connector {
     public nonisolated let kind: ConnectorKind = .bluesky
+    public nonisolated let cursorScope: ConnectorCursorScope = .refreshPagination
     public nonisolated let capabilities: ConnectorCapabilities = [.discovery, .deltaSync, .pagination, .fullContent, .engagementMetrics, .backgroundRefresh]
     private let http: any ConnectorHTTPClient
     public init(http: any ConnectorHTTPClient = URLSessionConnectorHTTPClient()) { self.http = http }

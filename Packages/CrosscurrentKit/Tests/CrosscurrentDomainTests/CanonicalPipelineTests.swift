@@ -138,6 +138,60 @@ func todayExcludesHistoricalBackfillButIncludesARealNewPublication() async throw
     #expect(Set(update.revision.entries.map(\.eventRevisionID)).count == update.revision.entries.count)
 }
 
+@Test func todayOpeningPreservesUnchangedMultisectionBriefing() async throws {
+    let (repository, locations) = try makeRepository()
+    defer { try? FileManager.default.removeItem(at: locations.container) }
+    let sourceID = SourceID(), endpointID = SourceEndpointID()
+    try await seedSource(repository, sourceID: sourceID, endpointID: endpointID, name: "Followed publisher")
+    let now = Date.now
+    for index in 0..<7 {
+        let item = try await seedItem(repository, sourceID: sourceID, endpointID: endpointID, externalID: "entry-\(index)", title: "Article \(index)", text: "Evidence supporting distinct article \(index).", publishedAt: now.addingTimeInterval(-3_600))
+        let segment = try #require(try await repository.itemSegments(revisionID: item.currentRevisionID).first)
+        let eventID = EventID()
+        let membership = EventMembershipAssertion(eventID: eventID, itemRevisionID: item.currentRevisionID, itemSegmentID: segment.id, segmentLineageID: segment.lineageID, decision: .accepted, role: .primary, confidence: .certain, identityWeight: 1, provenance: .deterministic)
+        let revision = EventRevision(eventID: eventID, title: "Article \(index)", summary: segment.text, primaryMembershipAssertionID: membership.id)
+        _ = try await repository.saveEvent(Event(id: eventID, currentRevisionID: revision.id), revision: revision, memberships: [membership])
+    }
+    let coordinator = TodayCoordinator(repository: repository)
+    let initial = try #require(try await coordinator.update(trigger: .opening, now: now))
+    #expect(Set(initial.revision.entries.map(\.section)).count > 1)
+    let reopened = try #require(try await coordinator.update(trigger: .opening, now: now))
+    #expect(!reopened.created && reopened.revision.id == initial.revision.id)
+}
+
+@Test func articleSectionsShareAnEventAndAutomaticLegacyDuplicatesAreReconciled() async throws {
+    let (repository, locations) = try makeRepository()
+    defer { try? FileManager.default.removeItem(at: locations.container) }
+    let sourceID = SourceID(), endpointID = SourceEndpointID()
+    try await seedSource(repository, sourceID: sourceID, endpointID: endpointID, name: "Technical publisher")
+    let revision = ItemRevision(itemID: ItemID(), title: "Technical article", publishedAt: Date.now.addingTimeInterval(-86_400 * 30), modifiedAt: .now, text: "First section evidence. Second independent paragraph within the same article.", contentHash: "sections")
+    let item = Item(id: revision.itemID, sourceID: sourceID, sourceEndpointID: endpointID, externalID: "sections", currentRevisionID: revision.id)
+    let segments = ["First section evidence.", "Second independent paragraph within the same article."].map {
+        ItemSegment(itemRevisionID: revision.id, kind: .section, span: .init(utf8Start: 0, utf8Length: $0.utf8.count, excerptHash: $0), text: $0, contentHash: $0)
+    }
+    _ = try await repository.saveItem(item, revision: revision, segments: segments)
+    _ = try await EvidenceEventMaintainer(repository: repository).run()
+    let initial = try await repository.currentEventAggregates()
+    #expect(initial.count == 1 && initial.first?.memberships.count == 2)
+    // Recreate the old product bug: one automatically generated duplicate Event
+    // for a section that is already evidence of the first Event.
+    let duplicateID = EventID()
+    let duplicateMembership = EventMembershipAssertion(eventID: duplicateID, itemRevisionID: revision.id, itemSegmentID: segments[1].id, segmentLineageID: segments[1].lineageID, decision: .accepted, role: .primary, confidence: .certain, identityWeight: 1, provenance: .deterministic)
+    let duplicateRevision = EventRevision(eventID: duplicateID, title: revision.title, summary: revision.text, primaryMembershipAssertionID: duplicateMembership.id)
+    _ = try await repository.saveEvent(Event(id: duplicateID, currentRevisionID: duplicateRevision.id), revision: duplicateRevision, memberships: [duplicateMembership])
+    #expect(try await repository.currentEventAggregates().count == 2)
+    var constraint = ClusteringConstraint(kind: .cannotLink, leftLineageID: segments[0].lineageID, rightLineageID: segments[1].lineageID)
+    _ = try await repository.saveConstraint(constraint)
+    #expect(try await repository.coalesceAutomaticArticleEvents() == 0)
+    #expect(try await repository.currentEventAggregates().count == 2)
+    constraint.isActive = false
+    _ = try await repository.saveConstraint(constraint)
+    #expect(try await repository.coalesceAutomaticArticleEvents() == 1)
+    #expect(try await repository.currentEventAggregates().count == 1)
+    #expect(try await repository.eventSnapshots(revisionIDs: [duplicateRevision.id]).count == 1)
+    #expect(try await repository.coalesceAutomaticArticleEvents() == 0)
+}
+
 @Test
 func manualMergeAndSplitKeepHistoryAndCreateDurableConstraints() async throws {
     let (repository, _) = try makeRepository()

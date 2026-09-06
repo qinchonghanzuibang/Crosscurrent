@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 enum CanonicalSchema {
-    static let version = 10
+    static let version = 11
 
     static func migrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -80,6 +80,38 @@ enum CanonicalSchema {
                 ) STRICT
                 """)
             try db.execute(sql: "PRAGMA user_version = 10")
+        }
+        migrator.registerMigration("canonical-v11-item-content-reversions") { db in
+            // Content hashes identify equal payloads, not revision identity. A
+            // publisher reverting A -> B -> A still creates a third revision.
+            // GRDB disables foreign keys for this migration and verifies them
+            // before commit, preserving every reference to the copied IDs.
+            try db.execute(sql: """
+                CREATE TABLE item_revisions_rebuilt (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
+                  ordinal INTEGER NOT NULL,
+                  title TEXT NOT NULL,
+                  author TEXT,
+                  published_at REAL,
+                  modified_at REAL,
+                  fetched_at REAL NOT NULL,
+                  language_code TEXT,
+                  plain_text TEXT NOT NULL,
+                  sanitized_html_blob_id TEXT REFERENCES blobs(id) ON DELETE SET NULL,
+                  evidence_blob_id TEXT REFERENCES blobs(id) ON DELETE SET NULL,
+                  content_hash TEXT NOT NULL,
+                  extraction_state TEXT NOT NULL,
+                  revision_reason TEXT NOT NULL,
+                  acquisition_provenance TEXT,
+                  UNIQUE(item_id, ordinal)
+                ) STRICT
+                """)
+            try db.execute(sql: "INSERT INTO item_revisions_rebuilt SELECT * FROM item_revisions")
+            try db.execute(sql: "DROP TABLE item_revisions")
+            try db.execute(sql: "ALTER TABLE item_revisions_rebuilt RENAME TO item_revisions")
+            try db.execute(sql: "CREATE INDEX item_revisions_item ON item_revisions(item_id, ordinal DESC)")
+            try db.execute(sql: "PRAGMA user_version = 11")
         }
         return migrator
     }

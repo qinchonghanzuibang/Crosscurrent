@@ -66,7 +66,17 @@ public enum DeterministicClusteringEngine {
         constraints: [ClusteringConstraint],
         policy: ClusteringPolicy = ClusteringPolicy()
     ) -> SegmentAssignment {
-        let active = constraints.filter { $0.isActive && $0.leftLineageID == segmentLineageID }
+        // Pairwise constraints are symmetric even though persistence stores one
+        // ordered pair. Membership decisions remain scoped to their left side.
+        let active = constraints.filter(\.isActive).compactMap { constraint -> ClusteringConstraint? in
+            if constraint.leftLineageID == segmentLineageID { return constraint }
+            guard constraint.rightLineageID == segmentLineageID,
+                  constraint.kind == .mustLink || constraint.kind == .cannotLink else { return nil }
+            var reversed = constraint
+            reversed.leftLineageID = segmentLineageID
+            reversed.rightLineageID = constraint.leftLineageID
+            return reversed
+        }
         var rejectedEvents = Set(active.compactMap { constraint -> EventID? in
             switch constraint.kind {
             case .cannotLink, .rejectedMembership: constraint.eventID

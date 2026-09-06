@@ -62,3 +62,23 @@ private struct ExamplePayload: Codable, Equatable {
     #expect(combined.contains(" or "))
     #expect(combined.contains("certificate leaf[subject.OU] = \"ABCDE12345\""))
 }
+
+@Test func stagedCapabilityRejectsSymlinkedAncestorsAndHardLinks() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: "CrosscurrentIPCLinks-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let staging = root.appending(path: "staging", directoryHint: .isDirectory)
+    let outside = root.appending(path: "outside", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    let data = Data("outside payload".utf8)
+    let file = outside.appending(path: "payload.bin")
+    try data.write(to: file)
+    try FileManager.default.createSymbolicLink(at: staging.appending(path: "linked"), withDestinationURL: outside)
+    try FileManager.default.linkItem(at: file, to: staging.appending(path: "hardlinked.bin"))
+    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    for relativePath in ["linked/payload.bin", "hardlinked.bin", "/outside/payload.bin", "../outside/payload.bin"] {
+        let capability = CCStagedFileCapability(relativePath: relativePath, expectedSize: Int64(data.count), sha256: digest, expiresAt: .now.addingTimeInterval(60))
+        #expect(throws: CCIPCError.invalidStagedPath) { try capability.consume(from: staging) }
+    }
+    #expect(try Data(contentsOf: file) == data)
+}

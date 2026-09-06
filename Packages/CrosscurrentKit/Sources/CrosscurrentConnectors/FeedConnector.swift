@@ -1,3 +1,4 @@
+import CryptoKit
 import FeedKit
 import Foundation
 import CrosscurrentDomain
@@ -32,10 +33,23 @@ public actor FeedConnector: Connector {
         guard let url = endpoint.canonicalURL else { throw ConnectorError.unsupportedInput }
         let response = try await http.get(url, headers: ["Accept": "application/atom+xml, application/rss+xml, application/feed+json, text/xml;q=0.9"])
         let feed = try Feed(data: response.data)
-        let candidates = Array(Self.items(from: feed).prefix(30))
-        let seen: Set<String> = (try? cursor?.decode([String].self)).map(Set.init) ?? []
-        let fresh = candidates.filter { !seen.contains($0.externalID) }
-        let next = try ConnectorCursor(family: "feed-seen-v1", value: Array(candidates.prefix(500).map(\.externalID)))
+        // IDs alone cannot detect corrected articles. Fingerprint the supplied evidence,
+        // and examine the complete fetched feed so entries below the old 30-item cap
+        // do not disappear before they have ever been ingested. Legacy cursors replay
+        // once through the canonical ingestion boundary to establish fingerprints.
+        // v3 also re-extracts fragments previously truncated by page heuristics.
+        let previous = cursor?.family == "feed-content-v3"
+            ? (try cursor?.decode([String: String].self) ?? [:]) : [:]
+        var fingerprints: [String: String] = [:]
+        var fresh: [ConnectorItemCandidate] = []
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        for candidate in Self.items(from: feed) where fingerprints[candidate.externalID] == nil {
+            let fingerprint = SHA256.hash(data: try encoder.encode(candidate)).map { String(format: "%02x", $0) }.joined()
+            fingerprints[candidate.externalID] = fingerprint
+            if previous[candidate.externalID] != fingerprint { fresh.append(candidate) }
+        }
+        let next = try ConnectorCursor(family: "feed-content-v3", value: fingerprints)
         return ConnectorRefreshPage(candidates: fresh, nextCursor: next, reachedEnd: true)
     }
 

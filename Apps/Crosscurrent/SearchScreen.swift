@@ -11,12 +11,13 @@ struct SearchScreen: View {
     @State private var facet = "All"
     @State private var results: [SearchResult] = []
     @State private var searching = false
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         LibraryPageShell("Search", subtitle: "Find stories, sources, people, and topics") {
             VStack(alignment: .leading, spacing: 14) {
-                HStack { Image(systemName: "magnifyingglass"); TextField("Items, Events, Sources, People, organizations, Topics", text: $query).textFieldStyle(.plain).font(.title3); Toggle("History", isOn: $includeHistory).toggleStyle(.button) }.padding(12).background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
-                Picker("Facet", selection: $facet) { ForEach(["All", "Events", "People", "Sources", "Topics"], id: \.self, content: Text.init) }.pickerStyle(.segmented).frame(maxWidth: 500)
+                HStack { Image(systemName: "magnifyingglass"); TextField("Items, Events, Sources, People, organizations, Topics", text: $query).textFieldStyle(.plain).font(.title3).focused($searchFocused); Toggle("History", isOn: $includeHistory).toggleStyle(.button) }.padding(12).background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+                Picker("Facet", selection: $facet) { ForEach(["All", "Items", "Events", "People", "Sources", "Topics"], id: \.self) { Text(LocalizedStringKey($0)).tag($0) } }.pickerStyle(.segmented).frame(maxWidth: 560)
             }
         } content: {
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -40,18 +41,22 @@ struct SearchScreen: View {
                 }
             }
         }
-        .task(id: SearchTaskKey(query: query, facet: facet, includeHistory: includeHistory)) {
-            guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { results = []; return }
+        .onAppear { searchFocused = true }
+        .task(id: SearchTaskKey(query: query, facet: facet, includeHistory: includeHistory, generation: model.canonicalGeneration)) {
+            guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { results = []; searching = false; return }
             searching = true
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            results = await model.search(query, kinds: selectedKinds, includeHistory: includeHistory)
+            let matches = await model.search(query, kinds: selectedKinds, includeHistory: includeHistory)
+            guard !Task.isCancelled else { return }
+            results = matches
             searching = false
         }
     }
 
     private var selectedKinds: Set<SearchDocumentKind> {
         switch facet {
+        case "Items": [.item]
         case "Events": [.event]
         case "People": [.person, .organization]
         case "Sources": [.source]
@@ -75,6 +80,7 @@ private struct SearchTaskKey: Hashable {
     var query: String
     var facet: String
     var includeHistory: Bool
+    var generation: Int64
 }
 
 private extension SearchDocumentKind {

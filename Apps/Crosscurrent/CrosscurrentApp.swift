@@ -14,7 +14,6 @@ import AppKit
 import ServiceManagement
 import Sparkle
 import SwiftUI
-import UserNotifications
 
 @main
 struct CrosscurrentApp: App {
@@ -37,16 +36,13 @@ struct CrosscurrentApp: App {
         .windowStyle(.titleBar)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Add Source…") {
-                    model.selection = .following
-                    model.followingFilter = .sources
-                    model.presentsAddSource = true
-                }
-                .keyboardShortcut("n", modifiers: .command)
+                Button("Add Source…") { model.showAddSource() }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("Search Crosscurrent") { model.selection = .search }
                     .keyboardShortcut("f", modifiers: .command)
                 Button("Refresh Today") { model.manualRefreshToday() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(!model.isReady || model.refreshInProgress)
             }
             CommandMenu("Event") {
                 Button("Previous Event") { model.stepSelectedEvent(by: -1) }
@@ -58,6 +54,7 @@ struct CrosscurrentApp: App {
                     .keyboardShortcut("o", modifiers: .command)
                 Button("Focus Reading") { model.toggleFocusReading() }
                     .keyboardShortcut("f", modifiers: [.command, .shift])
+                    .disabled(model.selection != .eventDetail)
                 Button("Save or Unsave Selected Event") { model.toggleSelectedEventSaved() }
                     .keyboardShortcut("s", modifiers: [.command, .option])
                 Button("Mark Selected Event Read") { model.markSelectedEventRead() }
@@ -93,7 +90,13 @@ struct CrosscurrentApp: App {
 final class AppModel: ObservableObject {
     @Published var selection: SidebarDestination? = .today
     @Published var selectedEventID: EventID?
+    @Published var selectedEvent: EventCardModel?
+    @Published private(set) var isReady = false
+    @Published private(set) var refreshInProgress = false
+    @Published private(set) var refreshingSourceIDs: Set<SourceID> = []
+    @Published var activityMessage: String?
     @Published var selectedItemDetail: StoredItemDetail?
+    @Published var itemReturnDestination: SidebarDestination = .search
     @Published var selectedLibraryStableID: String?
     @Published var selectedLibraryResultKind: SearchDocumentKind?
     @Published var presentsAddSource = false
@@ -160,6 +163,10 @@ final class AppModel: ObservableObject {
     private var weChatProvider: (any WeChatIndexProvider)?
     private var pendingBrowserAccounts: [AuthenticatedCreatorPlatform: ConnectorAccountID] = [:]
     private var destinationBeforeEvent: SidebarDestination = .today
+    private var discoveryRequestID = UUID()
+    private var isStarting = false
+    private var isReconciling = false
+    private var lastForegroundCheck = Date.distantPast
 
     init() {
         let feed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? ""
@@ -167,13 +174,13 @@ final class AppModel: ObservableObject {
         let configured = URL(string: feed)?.scheme == "https" && !key.isEmpty
         updaterController = SPUStandardUpdaterController(startingUpdater: configured, updaterDelegate: nil, userDriverDelegate: nil)
         updateStatus = configured ? String(localized: "Automatic signed updates enabled") : String(localized: "Release feed not configured")
-        #if DEBUG
-        if Self.fixtureState != "off" { events = FixtureLibrary.events }
-        #endif
     }
 
     func start() async {
-        guard repository == nil else { return }
+        guard !isReady, !isStarting else { return }
+        isStarting = true
+        startupError = nil
+        defer { isStarting = false }
         do {
             let locations: DatabaseLocations
             let teamID = Bundle.main.object(forInfoDictionaryKey: "CrosscurrentTeamIdentifier") as? String ?? ""
@@ -271,7 +278,7 @@ final class AppModel: ObservableObject {
             backgroundState = teamID.isEmpty ? String(localized: "Foreground refresh only") : CrosscurrentServices.agent.status.displayName
             browserWorkerState = CrosscurrentServices.browser.status.displayName
             refreshLocalDataUsage()
-            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+            isReady = true
             await reconcileGenerations()
             observationTask = Task { [weak self, repository] in
                 for await _ in await repository.wakeHints() {
@@ -281,8 +288,9 @@ final class AppModel: ObservableObject {
             }
             pollingTask = Task { [weak self] in
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(5))
+                    do { try await Task.sleep(for: .seconds(5)) } catch { return }
                     await self?.reconcileGenerations()
+                    await self?.refreshWhileOpen()
                 }
             }
         } catch {
@@ -294,6 +302,8 @@ final class AppModel: ObservableObject {
     func open(_ event: EventCardModel) {
         if let selection, selection != .eventDetail { destinationBeforeEvent = selection }
         selectedEventID = event.id
+        selectedEvent = event
+        readerExperience = ReaderExperienceState()
         selection = .eventDetail
         Task { [repository] in
             _ = try? await repository?.recordHistory(targetKind: "event", targetID: event.id.description, revisionID: event.revisionID.description)
@@ -303,6 +313,18 @@ final class AppModel: ObservableObject {
     func closeEvent() {
         readerExperience = ReaderExperienceState()
         selection = destinationBeforeEvent
+    }
+
+    func showAddSource() {
+        selection = .following
+        followingFilter = .sources
+        presentsAddSource = true
+    }
+
+    func openLibraryObject(_ id: String, kind: SearchDocumentKind) {
+        selectedLibraryStableID = id
+        selectedLibraryResultKind = kind
+        selection = .libraryDetail
     }
 
     var focusReading: Bool { readerExperience.isFocusReading }
@@ -389,32 +411,40 @@ final class AppModel: ObservableObject {
     }
 
     func openSelectedEvent() {
-        guard let selectedEventID, let event = events.first(where: { $0.id == selectedEventID }) else { return }
+        guard let event = selectedEvent else { return }
         open(event)
     }
 
     func toggleSelectedEventSaved() {
-        guard let selectedEventID, let event = events.first(where: { $0.id == selectedEventID }) else { return }
+        guard let event = selectedEvent else { return }
         toggleSaved(event)
     }
 
     func markSelectedEventRead() {
-        guard let selectedEventID, let event = events.first(where: { $0.id == selectedEventID }) else { return }
+        guard let event = selectedEvent else { return }
         setEventRead(event)
     }
 
     func markSelectedEventUnread() {
-        guard let selectedEventID, let event = events.first(where: { $0.id == selectedEventID }) else { return }
+        guard let event = selectedEvent else { return }
         setEventUnread(event)
     }
 
     func openSearchResult(_ result: SearchResult) async {
         switch result.kind {
         case .event:
-            guard let uuid = UUID(uuidString: result.stableID),
-                  let event = events.first(where: { $0.id == EventID(uuid) }) else { return }
-            open(event)
+            guard let uuid = UUID(uuidString: result.stableID), let repository else { return }
+            do {
+                let snapshots: [StoredEventSnapshot]
+                if result.isHistorical, let revision = result.revisionID.flatMap(UUID.init(uuidString:)) {
+                    snapshots = try await repository.eventSnapshots(revisionIDs: [EventRevisionID(revision)])
+                } else {
+                    snapshots = try await repository.currentEventSnapshots(eventIDs: [EventID(uuid)])
+                }
+                if let snapshot = snapshots.first { open(Self.eventCard(snapshot)) }
+            } catch { startupError = error.localizedDescription }
         case .item:
+            itemReturnDestination = .search
             guard let uuid = UUID(uuidString: result.stableID), let repository else { return }
             do {
                 selectedItemDetail = try await repository.itemDetail(
@@ -438,6 +468,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func openEvidence(_ evidence: StoredEventEvidence) async {
+        itemReturnDestination = .eventDetail
+        do {
+            selectedItemDetail = try await repository?.itemDetail(revisionID: evidence.itemRevisionID)
+            if selectedItemDetail != nil { selection = .itemDetail }
+        } catch { startupError = error.localizedDescription }
+    }
+
     func handleDeepLink(_ url: URL) {
         let parts = url.pathComponents.filter { $0 != "/" }
         if url.host == "event", let value = parts.first, let uuid = UUID(uuidString: value), let event = events.first(where: { $0.id == EventID(uuid) }) {
@@ -448,25 +486,37 @@ final class AppModel: ObservableObject {
     }
 
     func manualRefreshToday() {
+        guard isReady, !refreshInProgress else { return }
         Task {
+            refreshInProgress = true
+            activityMessage = String(localized: "Refreshing sources…")
+            defer { refreshInProgress = false }
+            var failures = 0
+            for source in sources where !source.source.isArchived {
+                do { try await refreshSource(source, manual: true) }
+                catch { failures += 1 }
+            }
             do {
                 guard let update = try await todayCoordinator?.update(trigger: .manualRefresh, schedule: briefingSchedule) else { return }
                 digestRevisionReason = update.revision.reason
                 digestUpdatedAt = update.revision.createdAt
                 try await reloadCanonicalEvents()
+                try await reloadCanonicalLibrary()
+                activityMessage = failures == 0 ? String(localized: "Sources and briefing are up to date.") : String(localized: "Briefing updated. Some sources could not refresh; see Sources for details.")
             } catch { startupError = error.localizedDescription }
         }
     }
 
     func reconcileGenerations() async {
-        guard let repository else { return }
+        guard let repository, !isReconciling else { return }
+        isReconciling = true
+        defer { isReconciling = false }
         do {
             let current = try await repository.generations().mapValues(\.generation)
             guard current != observedGenerations else { return }
             let previous = observedGenerations
-            observedGenerations = current
-            canonicalGeneration = current.values.max() ?? 0
-            if current[.events] != previous[.events] || current[.readState] != previous[.readState] || current[.topics] != previous[.topics] || current[.entities] != previous[.entities] {
+            if current[.searchInputs] != previous[.searchInputs] { canonicalGeneration += 1 }
+            if current[.events] != previous[.events] || current[.readState] != previous[.readState] || current[.topics] != previous[.topics] || current[.entities] != previous[.entities] || current[.library] != previous[.library] || current[.sources] != previous[.sources] || current[.endpoints] != previous[.endpoints] {
                 try await reloadCanonicalEvents()
             }
             if current[.sources] != previous[.sources] || current[.endpoints] != previous[.endpoints] || current[.entities] != previous[.entities] || current[.topics] != previous[.topics] || current[.library] != previous[.library] {
@@ -493,16 +543,17 @@ final class AppModel: ObservableObject {
                 digestUpdatedAt = state.latestRevision.createdAt
                 try await reloadCanonicalEvents()
             }
+            observedGenerations = current
         } catch {
             startupError = error.localizedDescription
         }
     }
 
-    func foregroundRefresh(endpointID: SourceEndpointID) async throws {
+    func foregroundRefresh(endpointID: SourceEndpointID, manual: Bool = true) async throws {
         guard let repository, let refreshExecutor else { throw CocoaError(.fileNoSuchFile) }
         let startedAt = Date.now
-        let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpointID, manual: true))
-        let job = try await repository.scheduleRefreshJob(endpointID: endpointID, payload: payload, manual: true)
+        let payload = try JSONEncoder().encode(RefreshJobPayload(endpointID: endpointID, manual: manual))
+        let job = try await repository.scheduleRefreshJob(endpointID: endpointID, payload: payload, manual: manual)
         if job.state == .leased { try? await reloadCanonicalLibrary(); return }
         guard let (leasedJob, lease) = try await repository.leaseJob(id: job.id, owner: "main-foreground", duration: 120) else {
             try? await reloadCanonicalLibrary()
@@ -522,7 +573,7 @@ final class AppModel: ObservableObject {
             try await reloadCanonicalEvents()
         } catch {
             let retry = JobRetryClassifier.classify(error, attempt: leasedJob.attemptCount)
-            if retry.exhausted { _ = try? await repository.suspendJob(lease, failureClass: retry.name) }
+            if retry.exhausted { _ = try? await repository.suspendJob(lease, failureClass: retry.name, retryAt: retry.retryAt) }
             else { _ = try? await repository.failJob(lease, retryClass: retry.name, retryAt: retry.retryAt) }
             let previousSuccess = endpointHealth[endpointID]?.lastSuccess != nil
             _ = try? await repository.recordSyncFailure(endpointID: endpointID, health: RefreshFailureHealthClassifier.health(for: error, attempt: leasedJob.attemptCount, hasCachedSuccess: previousSuccess), errorClass: retry.name, message: error.localizedDescription, startedAt: startedAt)
@@ -532,11 +583,54 @@ final class AppModel: ObservableObject {
     }
 
     func refresh(_ snapshot: StoredSourceSnapshot) async {
-        guard let endpoint = snapshot.endpoints.min(by: { ($0.weChatAcquisition?.priority ?? 100) < ($1.weChatAcquisition?.priority ?? 100) }) else { return }
-        do { try await foregroundRefresh(endpointID: endpoint.id) }
-        catch {
-            if RefreshFailureHealthClassifier.isTransient(error) == false { startupError = error.localizedDescription }
+        do { try await refreshSource(snapshot, manual: true) }
+        catch { startupError = error.localizedDescription }
+    }
+
+    private func refreshSource(_ snapshot: StoredSourceSnapshot, manual: Bool) async throws {
+        guard !refreshingSourceIDs.contains(snapshot.id) else { return }
+        let available = snapshot.endpoints.filter { $0.health != .disabled }
+        let endpoints: [SourceEndpoint]
+        if available.contains(where: { $0.connector == .weChatOfficialAccount }) {
+            endpoints = available.min(by: { ($0.weChatAcquisition?.priority ?? 100) < ($1.weChatAcquisition?.priority ?? 100) }).map { [$0] } ?? []
+        } else { endpoints = available }
+        refreshingSourceIDs.insert(snapshot.id)
+        defer { refreshingSourceIDs.remove(snapshot.id) }
+        var failure: Error?
+        for endpoint in endpoints {
+            try Task.checkCancellation()
+            do { try await foregroundRefresh(endpointID: endpoint.id, manual: manual) }
+            catch {
+                if Task.isCancelled || error is CancellationError { throw error }
+                failure = error
+            }
         }
+        try await reloadCanonicalLibrary()
+        if let failure { throw failure }
+    }
+
+    private func refreshWhileOpen() async {
+        #if DEBUG
+        guard Self.fixtureState == "off" else { return }
+        #endif
+        guard isReady, !refreshInProgress, Date.now.timeIntervalSince(lastForegroundCheck) >= 30 else { return }
+        lastForegroundCheck = .now
+        refreshInProgress = true
+        defer { refreshInProgress = false }
+        do {
+            if let databaseLocations, let repository {
+                let imported = try await ShareInboxImporter(locations: databaseLocations, repository: repository, leaseOwner: "main-share-import").importAvailable()
+                if imported.importedItemRevisions > 0 { _ = try await eventMaintainer?.run() }
+                if !imported.failures.isEmpty { startupError = imported.failures.joined(separator: "\n") }
+            }
+            let endpoints = SourceRefreshPlanner.dueEndpoints(in: sources, now: .now)
+            for endpoint in endpoints {
+                do { try await foregroundRefresh(endpointID: endpoint.id, manual: false) }
+                catch { /* The durable job and endpoint health retain retry details. */ }
+            }
+            _ = try await todayCoordinator?.update(trigger: .opening, schedule: briefingSchedule)
+            await reconcileGenerations()
+        } catch { startupError = error.localizedDescription }
     }
 
     func reconnect(_ endpoint: SourceEndpoint) async {
@@ -623,6 +717,23 @@ final class AppModel: ObservableObject {
             let account = existing?.keychainReference.flatMap { String(data: $0, encoding: .utf8) } ?? "provider-secret:\(id)"
             if !secret.isEmpty { try await keychain.put(Data(secret.utf8), account: account) }
             let settings = AIProviderSettings(endpoint: url, model: model)
+            let previousSettings = existing.flatMap { try? JSONDecoder().decode(AIProviderSettings.self, from: $0.configuration) }
+            if previousSettings?.endpoint != url {
+                var policy = try await repository.preferenceData(forKey: Self.aiPolicyKey)
+                    .flatMap { try? JSONDecoder().decode(AIContentPolicy.self, from: $0) } ?? AIContentPolicy()
+                let publicProviders = policy.publicCloudProviders
+                    .union(providerConfigurations.filter(Self.providerIsCloud).map(\.id))
+                    .union([id])
+                policy.publicCloudProviders.removeAll()
+                for sourceID in Array(policy.privateCloudProvidersBySource.keys) {
+                    policy.privateCloudProvidersBySource[sourceID]?.remove(id)
+                }
+                _ = try await repository.savePreferenceData(try JSONEncoder().encode(policy), forKey: Self.aiPolicyKey)
+                publicCloudConsent = false
+                for providerID in publicProviders.sorted() {
+                    _ = try await repository.recordConsent(providerID: providerID, privacy: .public, allowedTasks: Set(AITask.allCases), allowed: false)
+                }
+            }
             let record = ProviderConfigurationRecord(
                 id: id,
                 kind: kind,
@@ -639,7 +750,6 @@ final class AppModel: ObservableObject {
             providerConfigured = true
             if fastProviderID == nil { await setProviderRoute(.fast, providerID: id) }
             if reasoningProviderID == nil { await setProviderRoute(.reasoning, providerID: id) }
-            if publicCloudConsent { await setPublicCloudConsent(true) }
             return String(localized: "Provider configuration saved. Secrets remain in Keychain.")
         } catch { startupError = error.localizedDescription; return error.localizedDescription }
     }
@@ -743,7 +853,6 @@ final class AppModel: ObservableObject {
     }
 
     func setPublicCloudConsent(_ allowed: Bool) async {
-        publicCloudConsent = allowed
         guard let repository else { return }
         do {
             let cloudIDs = Set(providerConfigurations.filter(Self.providerIsCloud).map(\.id))
@@ -752,6 +861,7 @@ final class AppModel: ObservableObject {
             for providerID in cloudIDs {
                 _ = try await repository.recordConsent(providerID: providerID, privacy: .public, allowedTasks: Set(AITask.allCases), allowed: allowed)
             }
+            publicCloudConsent = allowed
         } catch { startupError = error.localizedDescription }
     }
 
@@ -789,30 +899,35 @@ final class AppModel: ObservableObject {
         }
         let policyData = try await repository.preferenceData(forKey: Self.aiPolicyKey)
         let policy = policyData.flatMap { try? JSONDecoder().decode(AIContentPolicy.self, from: $0) } ?? AIContentPolicy()
-        guard policy.allows(sourceID: event.primarySourceID, privacy: event.contentPrivacy, providerID: config.id, location: provider.executionLocation) else {
-            throw AIProviderError.policyDenied
-        }
-        let consentRevisionID: UUID?
-        if provider.executionLocation == .cloud {
-            let consentSourceID = event.contentPrivacy == .public ? nil : event.primarySourceID
-            guard let activeConsent = try await repository.activeConsentRevision(
-                providerID: config.id,
-                sourceID: consentSourceID,
-                privacy: event.contentPrivacy,
-                task: task
-            ) else {
-                // AIContentPolicy is the configured intent; the immutable consent revision is
-                // the auditable authorization. Both must be valid before any network request.
+        // Article summaries and comparisons can include secondary evidence. Authorize
+        // every exact membership before consulting the cache or issuing a request.
+        let snapshots = try await repository.eventSnapshots(revisionIDs: [event.revisionID])
+        guard let snapshot = snapshots.first else { throw AIProviderError.policyDenied }
+        let revisionIDs = Set(snapshot.aggregate.memberships.map(\.itemRevisionID))
+        guard !revisionIDs.isEmpty else { throw AIProviderError.policyDenied }
+        let classifications = try await repository.aiClassifications(itemRevisionIDs: revisionIDs)
+        var consentIDs: [UUID] = []
+        for classification in classifications {
+            guard policy.allows(sourceID: classification.sourceID, privacy: classification.contentPrivacy,
+                                providerID: config.id, location: provider.executionLocation) else {
                 throw AIProviderError.policyDenied
             }
-            consentRevisionID = activeConsent
-        } else {
-            consentRevisionID = nil
+            if provider.executionLocation == .cloud {
+                guard let consent = try await repository.activeConsentRevision(
+                    providerID: config.id,
+                    sourceID: classification.contentPrivacy == .public ? nil : classification.sourceID,
+                    privacy: classification.contentPrivacy, task: task
+                ) else { throw AIProviderError.policyDenied }
+                consentIDs.append(consent)
+            }
         }
+        let consentRevisionID = consentIDs.first
         let request = AIRequest(task: task, model: settings.model, instructions: prompt.revision.body, input: input, promptRevisionID: prompt.revision.id)
         let inputHash = HTTPMetadataRedactor.digest(Data(input.precomposedStringWithCanonicalMapping.utf8))
-        let policyDecision = "allowed:\(provider.executionLocation.rawValue):\(event.contentPrivacy.rawValue)"
-        let cacheIdentity = [task.rawValue, config.id, settings.model, prompt.revision.id.description, inputHash, policyDecision, consentRevisionID?.uuidString.lowercased() ?? "local"].joined(separator: "\u{1f}")
+        let policyDecision = "allowed:" + provider.executionLocation.rawValue + ":" + classifications.map {
+            "\($0.sourceID):\($0.contentPrivacy.rawValue)"
+        }.joined(separator: ",") + ":consents:" + Set(consentIDs.map(\.uuidString)).sorted().joined(separator: ",")
+        let cacheIdentity = [task.rawValue, config.id, HTTPMetadataRedactor.digest(config.configuration), settings.model, prompt.revision.id.description, inputHash, policyDecision, consentRevisionID?.uuidString.lowercased() ?? "local"].joined(separator: "\u{1f}")
         let cacheKey = HTTPMetadataRedactor.digest(Data(cacheIdentity.utf8))
         if let cached = try await repository.cachedAICompletion(cacheKey: cacheKey) { return cached.text }
         let response = try await provider.perform(request)
@@ -846,54 +961,59 @@ final class AppModel: ObservableObject {
 
     private static func providerIsCloud(_ configuration: ProviderConfigurationRecord) -> Bool {
         guard let settings = try? JSONDecoder().decode(AIProviderSettings.self, from: configuration.configuration) else { return true }
-        return !["localhost", "127.0.0.1", "::1"].contains(settings.endpoint.host?.lowercased() ?? "")
+        switch configuration.kind {
+        case "openai", "anthropic", "gemini", "openrouter": return true
+        default: return !AIEndpointSecurity.isLoopback(settings.endpoint)
+        }
+    }
+
+    private func persistUserChange(_ operation: @escaping @Sendable (CrosscurrentRepository) async throws -> Void) {
+        guard let repository else { return }
+        Task {
+            do {
+                try await operation(repository)
+                await reconcileGenerations()
+            } catch {
+                startupError = error.localizedDescription
+                try? await reloadCanonicalEvents()
+                try? await reloadCanonicalLibrary()
+            }
+        }
     }
 
     func setEventRead(_ event: EventCardModel) {
-        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
-        events[index].readStatus = .read
-        Task { [repository] in
-            _ = try? await repository?.markEventSeen(eventID: event.id, revisionID: event.revisionID, ordinal: event.revisionOrdinal)
+        persistUserChange { repository in
+            _ = try await repository.markEventSeen(eventID: event.id, revisionID: event.revisionID, ordinal: event.revisionOrdinal)
         }
     }
 
     func setEventUnread(_ event: EventCardModel) {
-        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
-        events[index].readStatus = .unread
-        Task { [repository] in _ = try? await repository?.setEventManualUnread(eventID: event.id, unread: true) }
+        persistUserChange { _ = try await $0.setEventManualUnread(eventID: event.id, unread: true) }
     }
 
     func toggleSaved(_ event: EventCardModel) {
         let shouldSave = !savedEventIDs.contains(event.id)
-        if shouldSave { savedEventIDs.insert(event.id) } else { savedEventIDs.remove(event.id) }
-        Task { [repository] in _ = try? await repository?.setEventSaved(event.id, saved: shouldSave) }
+        persistUserChange { _ = try await $0.setEventSaved(event.id, saved: shouldSave) }
     }
 
     func setEntityFollowed(_ snapshot: StoredEntitySnapshot, followed: Bool) {
-        if let index = people.firstIndex(where: { $0.id == snapshot.id }) { people[index].entity.isFollowed = followed }
-        Task { [repository] in _ = try? await repository?.setEntityFollowed(snapshot.id, followed: followed) }
+        persistUserChange { _ = try await $0.setEntityFollowed(snapshot.id, followed: followed) }
     }
 
     func setTopicFollowed(_ snapshot: StoredTopicSnapshot, followed: Bool) {
-        if let index = topics.firstIndex(where: { $0.id == snapshot.id }) { topics[index].topic.isFollowed = followed }
-        Task { [repository] in _ = try? await repository?.setTopicFollowed(snapshot.id, followed: followed) }
+        persistUserChange { _ = try await $0.setTopicFollowed(snapshot.id, followed: followed) }
     }
 
     func setSourceFollowed(_ snapshot: StoredSourceSnapshot, followed: Bool) {
-        if let index = sources.firstIndex(where: { $0.id == snapshot.id }) { sources[index].source.isFollowed = followed }
-        Task { [repository] in _ = try? await repository?.setSourceFollowed(snapshot.id, followed: followed) }
+        persistUserChange { _ = try await $0.setSourceFollowed(snapshot.id, followed: followed) }
     }
 
     func setCoverage(_ snapshot: StoredSourceSnapshot, ecosystem: CoverageEcosystem) {
         let assertion = SourceCoverageAssertion(
-            sourceID: snapshot.id,
-            ecosystem: ecosystem,
-            provenance: .user,
-            confidence: .certain,
-            rationale: String(localized: "User classification")
+            sourceID: snapshot.id, ecosystem: ecosystem, provenance: .user,
+            confidence: .certain, rationale: String(localized: "User classification")
         )
-        if let index = sources.firstIndex(where: { $0.id == snapshot.id }) { sources[index].coverage = assertion }
-        Task { [repository] in _ = try? await repository?.saveSourceCoverage(assertion) }
+        persistUserChange { _ = try await $0.saveSourceCoverage(assertion) }
     }
 
     func capturePlatformDiagnostic(_ endpoint: SourceEndpoint) async {
@@ -941,8 +1061,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func evidence(for eventID: EventID) async -> [StoredEventEvidence] {
-        do { return try await repository?.eventEvidence(eventID: eventID) ?? [] }
+    func evidence(for eventID: EventID, revisionID: EventRevisionID? = nil) async -> [StoredEventEvidence] {
+        do { return try await repository?.eventEvidence(eventID: eventID, revisionID: revisionID) ?? [] }
         catch { startupError = error.localizedDescription; return [] }
     }
 
@@ -951,8 +1071,8 @@ final class AppModel: ObservableObject {
         catch { startupError = error.localizedDescription; return [] }
     }
 
-    func coverageComparison(for eventID: EventID) async -> StoredCoverageComparison {
-        do { return try await repository?.coverageComparison(eventID: eventID) ?? StoredCoverageComparison() }
+    func coverageComparison(for eventID: EventID, revisionID: EventRevisionID? = nil) async -> StoredCoverageComparison {
+        do { return try await repository?.coverageComparison(eventID: eventID, revisionID: revisionID) ?? StoredCoverageComparison() }
         catch { startupError = error.localizedDescription; return StoredCoverageComparison() }
     }
 
@@ -966,32 +1086,24 @@ final class AppModel: ObservableObject {
                 let semantic = try await semanticIndexCoordinator.search(text, limit: 50)
                 let documents = try await repository.searchDocuments(includeHistory: false)
                 let byKey = Dictionary(uniqueKeysWithValues: documents.map { ("\($0.kind):\($0.stableID)", $0) })
-                var merged = Dictionary(uniqueKeysWithValues: lexical.map { ($0.id, $0) })
-                for candidate in semantic {
+                let semanticResults = semantic.compactMap { candidate -> SearchResult? in
                     guard candidate.score > 0,
                           let document = byKey[candidate.id],
                           let kind = SearchDocumentKind(rawValue: document.kind),
                           kinds.contains(kind)
-                    else { continue }
-                    let id = "\(kind.rawValue):\(document.stableID):\(document.revisionID ?? "current")"
-                    if var existing = merged[id] {
-                        existing.matchReasons.insert(.semantic)
-                        existing.score = min(1, existing.score * 0.7 + candidate.score * 0.3)
-                        merged[id] = existing
-                    } else {
-                        merged[id] = SearchResult(
-                            stableID: document.stableID,
-                            kind: kind,
-                            revisionID: document.revisionID,
-                            title: document.title,
-                            snippet: String(document.body.prefix(240)),
-                            score: candidate.score * 0.75,
-                            isHistorical: false,
-                            matchReasons: [.semantic]
-                        )
-                    }
+                    else { return nil }
+                    return SearchResult(
+                        stableID: document.stableID,
+                        kind: kind,
+                        revisionID: document.revisionID,
+                        title: document.title,
+                        snippet: String(document.body.prefix(240)),
+                        score: candidate.score,
+                        isHistorical: false,
+                        matchReasons: [.semantic]
+                    )
                 }
-                return merged.values.sorted { lhs, rhs in lhs.score == rhs.score ? lhs.title < rhs.title : lhs.score > rhs.score }.prefix(50).map { $0 }
+                return ReciprocalRankFusion.fuse(lexical: lexical, semantic: semanticResults)
             } catch {
                 semanticIndexDidFail(error)
                 return lexical
@@ -1003,7 +1115,12 @@ final class AppModel: ObservableObject {
     }
 
     private func startSemanticIndex(repository: CrosscurrentRepository, locations: DatabaseLocations) {
-        let assetDirectory = Self.embeddingAssetDirectory ?? locations.container.appending(path: "Models/multilingual-e5-small-ort-cpu/current", directoryHint: .isDirectory)
+        #if DEBUG
+        let debugAssetDirectory = Self.embeddingAssetDirectory
+        #else
+        let debugAssetDirectory: URL? = nil
+        #endif
+        let assetDirectory = debugAssetDirectory ?? locations.container.appending(path: "Models/multilingual-e5-small-ort-cpu/current", directoryHint: .isDirectory)
         guard FileManager.default.fileExists(atPath: assetDirectory.appending(path: "artifact-manifest.json").path) else { return }
         embeddingStatus = String(localized: "Validating local embedding asset…")
         let semanticRoot = locations.derivedSearch.appending(path: "Semantic", directoryHint: .isDirectory)
@@ -1066,14 +1183,18 @@ final class AppModel: ObservableObject {
         guard let discoveryService else { return String(localized: "Source discovery is not ready.") }
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return String(localized: "Enter an Official Account name.") }
+        let requestID = UUID()
+        discoveryRequestID = requestID
+        startupError = nil
         sourceDiscoveryInProgress = true
-        defer { sourceDiscoveryInProgress = false }
+        defer { if discoveryRequestID == requestID { sourceDiscoveryInProgress = false } }
         do {
             let context = ConnectorContext(allowsUserInteraction: true)
             let results: [SourceDiscoveryPreview]
             if more { results = try await discoveryService.searchMore(normalized, context: context) }
             else { results = try await discoveryService.search(normalized, context: context) }
             try Task.checkCancellation()
+            guard discoveryRequestID == requestID else { return "" }
             if more {
                 var existingIdentities = Set(sourceSearchResults.flatMap { $0.result.endpoints }.flatMap { ($0.weChatAcquisition?.accountAliases ?? []) + [$0.externalID] })
                 for result in results {
@@ -1094,18 +1215,22 @@ final class AppModel: ObservableObject {
         } catch is CancellationError {
             return ""
         } catch ConnectorError.configurationRequired {
+            guard !Task.isCancelled, discoveryRequestID == requestID else { return "" }
             weChatIndexConfigured = false
             weChatIndexStatus = String(localized: "Not configured")
             searchMoreNeedsConfiguration = more
             return String(localized: "Broader WeChat search requires an optional index provider in Advanced settings. Public catalog accounts remain available without a key.")
         } catch ConnectorError.quotaExhausted {
+            guard !Task.isCancelled, discoveryRequestID == requestID else { return "" }
             weChatIndexConfigured = true
             weChatIndexStatus = String(localized: "Provider balance exhausted")
             return weChatIndexStatus
         } catch ConnectorError.rateLimited {
+            guard !Task.isCancelled, discoveryRequestID == requestID else { return "" }
             weChatIndexStatus = String(localized: "Rate limited")
             return String(localized: "The WeChat Index is rate limited. Try again later.")
         } catch {
+            guard !Task.isCancelled, discoveryRequestID == requestID else { return "" }
             if !more { sourceSearchResults = [] }
             startupError = error.localizedDescription
             return error.localizedDescription
@@ -1118,9 +1243,16 @@ final class AppModel: ObservableObject {
     }
 
     func previewSource(_ input: String) async -> String {
-        guard let url = URL(string: input), let discoveryService else { return String(localized: "Enter a valid Source URL.") }
+        let requestID = UUID()
+        discoveryRequestID = requestID
+        sourcePreview = nil
+        startupError = nil
+        guard let url = URL(string: input), let discoveryService else {
+            sourceDiscoveryInProgress = false
+            return String(localized: "Enter a valid Source URL.")
+        }
         sourceDiscoveryInProgress = true
-        defer { sourceDiscoveryInProgress = false }
+        defer { if discoveryRequestID == requestID { sourceDiscoveryInProgress = false } }
         do {
             let platform = Self.authenticatedPlatform(for: url)
             var accountID: ConnectorAccountID?
@@ -1137,16 +1269,24 @@ final class AppModel: ObservableObject {
                     return String(localized: "Login window opened. Complete authentication, then choose Add and Refresh again.")
                 }
             }
-            sourcePreview = try await discoveryService.preview(.init(url: url, accountID: accountID), context: ConnectorContext(allowsUserInteraction: true))
+            let preview = try await discoveryService.preview(.init(url: url, accountID: accountID), context: ConnectorContext(allowsUserInteraction: true))
+            try Task.checkCancellation()
+            guard discoveryRequestID == requestID else { return "" }
+            sourcePreview = preview
             pendingPlatformCapture = nil
             return String(localized: "Source found. Review it before subscribing.")
-        } catch { startupError = error.localizedDescription; return error.localizedDescription }
+        } catch {
+            guard !Task.isCancelled, discoveryRequestID == requestID else { return "" }
+            startupError = error.localizedDescription
+            return error.localizedDescription
+        }
     }
 
     func subscribeSourcePreview(action: SourceDiscoveryAction = .subscribe) async -> String {
+        guard !sourceFollowInProgress else { return "" }
         guard let preview = sourcePreview, let discoveryService else { return String(localized: "Discover a Source first.") }
         sourceDiscoveryInProgress = true
-        sourceFollowInProgress = preview.connectorKind == .weChatOfficialAccount
+        sourceFollowInProgress = true
         defer { sourceDiscoveryInProgress = false; sourceFollowInProgress = false }
         do {
             let selectedAction = preview.availableActions.contains(action) ? action : (preview.availableActions.first ?? .subscribe)
@@ -1154,12 +1294,20 @@ final class AppModel: ObservableObject {
             clearSourcePreview()
             if let inputURL = preview.inputURL, let platform = Self.authenticatedPlatform(for: inputURL) { pendingBrowserAccounts[platform] = nil }
             try await reloadCanonicalLibrary()
-            if selectedAction != .importOnce, let endpoint = committed.endpointIDs.first { try await foregroundRefresh(endpointID: endpoint) }
+            if selectedAction != .importOnce, let source = sources.first(where: { source in source.endpoints.contains { committed.endpointIDs.contains($0.id) } }) { try await refreshSource(source, manual: true) }
+            else {
+                _ = try await eventMaintainer?.run()
+                _ = try await indexCoordinator?.synchronize()
+                _ = try await todayCoordinator?.update(trigger: .manualRefresh, schedule: briefingSchedule)
+                try await reloadCanonicalEvents()
+            }
             return selectedAction == .importOnce ? String(localized: "Page imported.") : String(localized: "Source added and refreshed.")
         } catch { startupError = error.localizedDescription; return error.localizedDescription }
     }
 
     func clearSourcePreview() {
+        discoveryRequestID = UUID()
+        if !sourceFollowInProgress { sourceDiscoveryInProgress = false }
         sourcePreview = nil
         sourceSearchResults = []
         sourceSearchQuery = nil
@@ -1186,15 +1334,17 @@ final class AppModel: ObservableObject {
             let data = try Data(contentsOf: url)
             let result = try await OPMLImportService(repository: repository, discovery: discoveryService)
                 .importData(data, context: ConnectorContext(allowsUserInteraction: true))
+            var refreshFailures: [String] = []
             for endpointID in result.entries.flatMap(\.endpointIDs) {
-                try await foregroundRefresh(endpointID: endpointID)
+                do { try await foregroundRefresh(endpointID: endpointID) }
+                catch { refreshFailures.append(error.localizedDescription) }
             }
             try await reloadCanonicalLibrary()
             let summary = result.failures.isEmpty
                 ? String(localized: "Imported \(result.sourceCount) Sources in \(result.folderCount) folders.")
                 : String(localized: "Imported \(result.sourceCount) Sources; \(result.failures.count) entries need attention.")
             let details = result.entries.map { "\($0.succeeded ? "✓" : "⚠") \($0.title): \($0.message)" }
-            return ([summary] + details).joined(separator: "\n")
+            return ([summary] + details + refreshFailures).joined(separator: "\n")
         } catch {
             startupError = error.localizedDescription
             return error.localizedDescription
@@ -1257,16 +1407,20 @@ final class AppModel: ObservableObject {
 
     private func reloadCanonicalEvents() async throws {
         guard let repository else { return }
-        let snapshots = try await repository.currentEventSnapshots(limit: 500)
-        guard !snapshots.isEmpty else {
-            events = []
-            digestSections = [:]
-            return
+        var snapshots = try await repository.currentEventSnapshots(limit: 500)
+        let savedIDs = try await repository.savedEventIDs()
+        let missingSaved = savedIDs.subtracting(snapshots.map { $0.aggregate.event.id })
+        snapshots += try await repository.currentEventSnapshots(eventIDs: missingSaved)
+        events = snapshots.map(Self.eventCard)
+        if let selectedEvent, let refreshed = try await repository.eventSnapshots(revisionIDs: [selectedEvent.revisionID]).first {
+            var card = Self.eventCard(refreshed)
+            card.score = selectedEvent.score
+            card.reasons = selectedEvent.reasons
+            self.selectedEvent = card
         }
-        let cards = snapshots.map(Self.eventCard)
-        events = cards
-        let byRevision = Dictionary(uniqueKeysWithValues: cards.map { ($0.revisionID, $0) })
         if let state = try await repository.digestState(briefingDay: Calendar.autoupdatingCurrent.startOfDay(for: .now)) {
+            let frozen = try await repository.eventSnapshots(revisionIDs: Set(state.latestRevision.entries.map(\.eventRevisionID)))
+            let byRevision = Dictionary(uniqueKeysWithValues: frozen.map { ( $0.aggregate.revision.id, Self.eventCard($0)) })
             digestSections = Dictionary(grouping: state.latestRevision.entries, by: \.section).mapValues { entries in
                 entries.sorted { $0.rank < $1.rank }.compactMap { entry in
                     guard var card = byRevision[entry.eventRevisionID] else { return nil }
@@ -1296,10 +1450,7 @@ final class AppModel: ObservableObject {
 
     private static func eventCard(_ snapshot: StoredEventSnapshot) -> EventCardModel {
         let revision = snapshot.aggregate.revision
-        var reasons: [RankingReason] = [.primarySource]
-        if snapshot.independentSourceCount >= 2 { reasons.append(.independentCoverage) }
-        if !snapshot.followedPeople.isEmpty { reasons.append(.followedPerson) }
-        if snapshot.chinaGlobalCoverageSufficient { reasons.append(.chinaGlobalCoverage) }
+        let ranking = EventRanking.rank(snapshots: [snapshot]).first
         let escaped = snapshot.readerText
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
@@ -1323,8 +1474,8 @@ final class AppModel: ObservableObject {
             followedPeople: snapshot.followedPeople,
             date: snapshot.meaningfulActivityAt ?? revision.endedAt ?? revision.startedAt ?? revision.createdAt,
             readStatus: snapshot.readStatus,
-            score: min(1, 0.5 + Double(snapshot.independentSourceCount) * 0.06),
-            reasons: reasons,
+            score: ranking?.score ?? 0,
+            reasons: ranking?.reasons ?? [],
             bodyHTML: snapshot.readerHTML ?? "<p>\(escaped)</p>",
             originalURL: snapshot.originalURL,
             originalAccountID: snapshot.originalAccountID
@@ -1355,7 +1506,7 @@ final class AppModel: ObservableObject {
     private static func authenticatedPlatform(for url: URL) -> AuthenticatedCreatorPlatform? {
         let host = url.host?.lowercased() ?? ""
         if host == "xiaohongshu.com" || host.hasSuffix(".xiaohongshu.com") || host == "xhslink.com" { return .xiaohongshu }
-        if host == "x.com" || host.hasSuffix("twitter.com") { return .x }
+        if host == "x.com" || host == "twitter.com" || host.hasSuffix(".twitter.com") { return .x }
         if host == "weibo.com" || host.hasSuffix(".weibo.com") { return .weibo }
         if host == "zhihu.com" || host.hasSuffix(".zhihu.com") { return .zhihu }
         return nil
@@ -1395,6 +1546,7 @@ final class AppModel: ObservableObject {
     }
 
     private func seedDevelopmentLibrary(_ repository: CrosscurrentRepository) async throws {
+        guard Self.fixtureState != "empty" else { return }
         struct SourceFixture {
             var id: UUID; var revisionID: UUID; var endpointID: UUID
             var name: String; var kind: SourceKind; var connector: ConnectorKind
@@ -1424,7 +1576,18 @@ final class AppModel: ObservableObject {
             let revisionID = TopicRevisionID(UUID(uuidString: "26000000-0000-0000-0000-00000000000\(index + 1)")!)
             _ = try await repository.saveTopic(Topic(id: topicID, currentRevisionID: revisionID, isFollowed: index < 2), revision: TopicRevision(id: revisionID, topicID: topicID, name: name), idempotencyKey: "debug-fixture-topic:\(index)")
         }
-        _ = try await repository.setEventSaved(FixtureLibrary.events[4].id, saved: true)
+        let pipeline = IngestionPipeline(repository: repository, blobStore: databaseLocations.map { CanonicalBlobStore(locations: $0, repository: repository) })
+        for (index, fixture) in FixtureLibrary.events.enumerated() {
+            _ = try await pipeline.ingest(candidate: ConnectorItemCandidate(
+                externalID: "fixture-\(index)", canonicalURL: fixture.originalURL,
+                title: fixture.title, publishedAt: fixture.date,
+                contentHTML: fixture.bodyHTML, contentText: fixture.summary, topicNames: fixture.topics
+            ), sourceID: SourceID(fixtures[0].id), endpointID: SourceEndpointID(fixtures[0].endpointID))
+        }
+        _ = try await eventMaintainer?.run()
+        if let saved = try await repository.currentEventSnapshots().first {
+            _ = try await repository.setEventSaved(saved.aggregate.event.id, saved: true)
+        }
     }
     #endif
 
@@ -1454,6 +1617,7 @@ final class AppModel: ObservableObject {
             guard let survivor = try await correctionService?.merge(eventIDs: [event.id, other.id]) else { return }
             try await reloadCanonicalEvents()
             selectedEventID = survivor
+            selectedEvent = events.first { $0.id == survivor }
             _ = try await indexCoordinator?.synchronize()
             _ = try await todayCoordinator?.update(trigger: .eventChanged(EventChangeMateriality(changeKind: .merge, importance: 1, lineageChanged: true)), schedule: briefingSchedule)
         } catch { startupError = error.localizedDescription }

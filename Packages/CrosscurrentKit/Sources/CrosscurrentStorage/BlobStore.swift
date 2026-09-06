@@ -5,22 +5,15 @@ import GRDB
 public actor CanonicalBlobStore {
     private let root: URL
     private let repository: CrosscurrentRepository
-    private let manager: FileManager
 
-    public init(locations: DatabaseLocations, repository: CrosscurrentRepository, manager: FileManager = .default) {
+    public init(locations: DatabaseLocations, repository: CrosscurrentRepository) {
         self.root = locations.blobs
         self.repository = repository
-        self.manager = manager
     }
 
     public func put(_ data: Data, mediaType: String? = nil, retentionClass: BlobRetentionClass) async throws -> StoredBlob {
         let digest = HTTPMetadataRedactor.digest(data)
         let relativePath = "\(digest.prefix(2))/\(digest.dropFirst(2).prefix(2))/\(digest)"
-        let destination = root.appending(path: relativePath)
-        try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if !manager.fileExists(atPath: destination.path) {
-            try data.write(to: destination, options: [.atomic, .completeFileProtectionUnlessOpen])
-        }
         let blob = StoredBlob(
             id: BlobID(Self.uuid(fromSHA256: digest)),
             sha256: digest,
@@ -29,7 +22,7 @@ public actor CanonicalBlobStore {
             mediaType: mediaType,
             retentionClass: retentionClass
         )
-        _ = try await repository.registerBlob(blob, idempotencyKey: "blob:\(digest)")
+        try await repository.storeBlob(blob, contents: data)
         return blob
     }
 
@@ -77,59 +70,63 @@ public actor BlobGarbageCollector {
     }
 
     public func run(now: Date = .now) throws -> BlobGarbageCollectionResult {
-        struct Candidate { var id: String; var relativePath: String; var quarantinedAt: Date? }
-
-        let candidates: [Candidate] = try database.pool.read { db in
-            let rows = try Row.fetchAll(
-                db,
-                sql: """
-                SELECT id, relative_path, quarantined_at FROM blobs b
-                WHERE NOT EXISTS (SELECT 1 FROM raw_fetches r WHERE r.blob_id=b.id)
-                  AND NOT EXISTS (SELECT 1 FROM item_revisions r WHERE r.sanitized_html_blob_id=b.id OR r.evidence_blob_id=b.id)
-                  AND NOT EXISTS (SELECT 1 FROM item_assets a WHERE a.blob_id=b.id)
-                """
-            )
-            return rows.map { row in
-                Candidate(
-                    id: row["id"],
-                    relativePath: row["relative_path"],
-                    quarantinedAt: (row["quarantined_at"] as Double?).map(Date.init(timeIntervalSince1970:))
-                )
-            }
-        }
-
-        var quarantined = 0
-        var deleted = 0
-        try database.withCanonicalWriteAccess {
+        let result = try database.withCanonicalWriteAccess {
             try database.pool.write { db in
+                // Check reachability under the same writer transaction that
+                // removes the file; another process cannot attach it in between.
+                let candidates = try Row.fetchAll(db, sql: "SELECT id, sha256, relative_path, quarantined_at FROM blobs b WHERE \(Self.unreferencedPredicate)")
+                var quarantined = 0, deleted = 0
                 for candidate in candidates {
-                    if let date = candidate.quarantinedAt, now.timeIntervalSince(date) >= quarantineDuration {
-                        let url = database.locations.blobs.appending(path: candidate.relativePath)
-                        if manager.fileExists(atPath: url.path) { try manager.removeItem(at: url) }
-                        try db.execute(sql: "DELETE FROM blobs WHERE id=?", arguments: [candidate.id])
+                    let date = (candidate["quarantined_at"] as Double?).map(Date.init(timeIntervalSince1970:))
+                    if let date, now.timeIntervalSince(date) >= quarantineDuration {
+                        try remove(candidate, db: db)
                         deleted += 1
-                    } else if candidate.quarantinedAt == nil {
-                        try db.execute(sql: "UPDATE blobs SET quarantined_at=? WHERE id=?", arguments: [now.timeIntervalSince1970, candidate.id])
+                    } else if date == nil {
+                        try db.execute(sql: "UPDATE blobs SET quarantined_at=? WHERE id=?", arguments: [now.timeIntervalSince1970, candidate["id"] as String])
                         quarantined += 1
                     }
                 }
+                if quarantined + deleted > 0 { try advanceGeneration(db, at: now) }
+                return BlobGarbageCollectionResult(newlyQuarantined: quarantined, deleted: deleted)
             }
         }
-        return BlobGarbageCollectionResult(newlyQuarantined: quarantined, deleted: deleted)
+        if result.newlyQuarantined + result.deleted > 0 { CrossProcessObservationHub().postWakeHint() }
+        return result
     }
 
     public func purgeImmediately(blobID: BlobID) throws {
-        let path: String? = try database.pool.read { db in
-            try String.fetchOne(db, sql: "SELECT relative_path FROM blobs WHERE id=?", arguments: [blobID.description])
-        }
-        if let path {
-            let url = database.locations.blobs.appending(path: path)
-            if manager.fileExists(atPath: url.path) { try manager.removeItem(at: url) }
-            try database.withCanonicalWriteAccess {
-                try database.pool.write { db in
-                    try db.execute(sql: "DELETE FROM blobs WHERE id=?", arguments: [blobID.description])
-                }
+        let removed = try database.withCanonicalWriteAccess {
+            try database.pool.write { db in
+                guard let row = try Row.fetchOne(db, sql: "SELECT * FROM blobs WHERE id=?", arguments: [blobID.description]) else { return false }
+                let unreferenced = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM blobs b WHERE b.id=? AND \(Self.unreferencedPredicate))", arguments: [blobID.description]) ?? false
+                guard unreferenced else { throw CrosscurrentStorageError.invalidStagedData }
+                try remove(row, db: db)
+                try advanceGeneration(db, at: .now)
+                return true
             }
         }
+        if removed { CrossProcessObservationHub().postWakeHint() }
+    }
+
+    private static let unreferencedPredicate = """
+        NOT EXISTS (SELECT 1 FROM raw_fetches r WHERE r.blob_id=b.id)
+        AND NOT EXISTS (SELECT 1 FROM item_revisions r WHERE r.sanitized_html_blob_id=b.id OR r.evidence_blob_id=b.id)
+        AND NOT EXISTS (SELECT 1 FROM item_assets a WHERE a.blob_id=b.id)
+        """
+
+    private func remove(_ row: Row, db: Database) throws {
+        let url = database.locations.blobs.appending(path: row["relative_path"] as String)
+        if manager.fileExists(atPath: url.path) { try manager.removeItem(at: url) }
+        try db.execute(sql: "DELETE FROM blobs WHERE id=?", arguments: [row["id"] as String])
+        // A content-addressed blob can legitimately be fetched again after GC.
+        try db.execute(sql: "DELETE FROM idempotency_commits WHERE idempotency_key=?", arguments: ["blob:" + (row["sha256"] as String)])
+    }
+
+    private func advanceGeneration(_ db: Database, at date: Date) throws {
+        try db.execute(sql: """
+            INSERT INTO database_change_generations (domain, generation, committed_at, writer_instance)
+            VALUES ('blobs', 1, ?, 'blob-gc') ON CONFLICT(domain) DO UPDATE SET
+              generation=generation+1, committed_at=excluded.committed_at, writer_instance=excluded.writer_instance
+            """, arguments: [date.timeIntervalSince1970])
     }
 }

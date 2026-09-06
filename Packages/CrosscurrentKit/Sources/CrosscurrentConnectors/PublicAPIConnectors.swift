@@ -51,6 +51,7 @@ public actor ArxivConnector: Connector {
 
 public actor HackerNewsConnector: Connector {
     public nonisolated let kind: ConnectorKind = .hackerNews
+    public nonisolated let cursorScope: ConnectorCursorScope = .refreshPagination
     public nonisolated let capabilities: ConnectorCapabilities = [.discovery, .deltaSync, .pagination, .engagementMetrics, .backgroundRefresh]
     private let http: any ConnectorHTTPClient
     private struct Story: Decodable, Sendable {

@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 public enum CCIPCMessageType: String, Codable, CaseIterable, Sendable {
@@ -147,19 +148,57 @@ public struct CCStagedFileCapability: Codable, Hashable, Sendable {
         guard expiresAt > now else { throw CCIPCError.expiredCapability }
         guard expectedSize >= 0, expectedSize <= Self.maximumBytes else { throw CCIPCError.payloadTooLarge(Int(expectedSize)) }
 
-        let root = stagingRoot.standardizedFileURL
-        let candidate = root.appending(path: relativePath).standardizedFileURL
-        let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        guard candidate.path.hasPrefix(rootPrefix), candidate.path != root.path else {
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\0") }) else {
             throw CCIPCError.invalidStagedPath
         }
-        let values = try candidate.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey])
-        guard values.isRegularFile == true, values.isSymbolicLink != true else { throw CCIPCError.invalidStagedPath }
-        guard Int64(values.fileSize ?? -1) == expectedSize else { throw CCIPCError.stagedFileSizeMismatch }
-        let data = try Data(contentsOf: candidate, options: [.mappedIfSafe])
+        // Resolve only the trusted root (e.g. /tmp). Open every untrusted path
+        // component relative to a directory descriptor without following links.
+        // A lexical prefix check cannot protect against a symlinked ancestor.
+        var directory = open(stagingRoot.resolvingSymlinksInPath().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        guard directory >= 0 else { throw CCIPCError.invalidStagedPath }
+        defer { close(directory) }
+        for component in components.dropLast() {
+            let child = openat(directory, component, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+            guard child >= 0 else { throw CCIPCError.invalidStagedPath }
+            close(directory)
+            directory = child
+        }
+        let filename = components[components.count - 1]
+        let file = openat(directory, filename, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+        guard file >= 0 else { throw CCIPCError.invalidStagedPath }
+        defer { close(file) }
+        var metadata = stat()
+        guard fstat(file, &metadata) == 0,
+              metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              metadata.st_nlink == 1 else { throw CCIPCError.invalidStagedPath }
+        guard metadata.st_size == expectedSize else { throw CCIPCError.stagedFileSizeMismatch }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+        while true {
+            let count = read(file, &buffer, min(buffer.count, Int(expectedSize) - data.count + 1))
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            if count == 0 { break }
+            data.append(contentsOf: buffer.prefix(count))
+            guard data.count <= expectedSize else { throw CCIPCError.stagedFileSizeMismatch }
+        }
+        guard data.count == expectedSize else { throw CCIPCError.stagedFileSizeMismatch }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         guard digest == sha256.lowercased() else { throw CCIPCError.stagedFileDigestMismatch }
-        if deleteAfterReading { try FileManager.default.removeItem(at: candidate) }
+        if deleteAfterReading {
+            var current = stat()
+            guard fstatat(directory, filename, &current, AT_SYMLINK_NOFOLLOW) == 0,
+                  current.st_dev == metadata.st_dev, current.st_ino == metadata.st_ino else {
+                throw CCIPCError.invalidStagedPath
+            }
+            guard unlinkat(directory, filename, 0) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        }
         return data
     }
 }

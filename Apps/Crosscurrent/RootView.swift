@@ -48,6 +48,7 @@ struct RootView: View {
                 Section { navigation(.search) }
             }
             .navigationTitle("Crosscurrent")
+            .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 280)
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 8) {
                     Circle().fill(model.backgroundState == String(localized: "Enabled") ? Color.green : Color.secondary).frame(width: 7, height: 7)
@@ -58,10 +59,34 @@ struct RootView: View {
                 .background(.bar)
             }
         } detail: {
-            destination
+            VStack(spacing: 0) {
+                if let error = model.startupError, model.isReady {
+                    HStack(alignment: .top) {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.callout).textSelection(.enabled)
+                        Spacer()
+                        Button { model.startupError = nil } label: { Label("Dismiss", systemImage: "xmark") }
+                            .labelStyle(.iconOnly).buttonStyle(.borderless)
+                    }.padding(12).background(Color.orange.opacity(0.12))
+                }
+                if model.isReady {
+                    destination
+                } else if let error = model.startupError {
+                    ContentUnavailableView {
+                        Label("Couldn’t Open Library", systemImage: "externaldrive.badge.exclamationmark")
+                    } description: { Text(error).textSelection(.enabled) } actions: {
+                        Button("Retry") { Task { await model.start() } }
+                    }
+                } else {
+                    ProgressView("Opening library…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
         }
         .navigationSplitViewStyle(.balanced)
         .onChange(of: model.focusReading) { _, focused in columnVisibility = focused ? .detailOnly : .all }
+        .onChange(of: model.selection) { _, destination in
+            if destination != .eventDetail { model.readerExperience = .init() }
+        }
         .onExitCommand {
             guard model.selection == .eventDetail else { return }
             if model.handleReaderEscape() == .navigateBack { model.closeEvent() }
@@ -81,7 +106,7 @@ struct RootView: View {
         case .following: FollowingView()
         case .saved: SavedView()
         case .search: SearchScreen()
-        case .eventDetail: EventDetailView()
+        case .eventDetail: EventDetailView().id(model.selectedEvent?.revisionID)
         case .itemDetail: ItemDetailView()
         case .libraryDetail: LibraryObjectDetailView()
         }

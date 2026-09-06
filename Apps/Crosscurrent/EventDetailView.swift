@@ -15,7 +15,7 @@ struct EventDetailView: View {
     @State private var perspectiveSynthesis = ""
     @State private var perspectiveSynthesisStatus = ""
 
-    private var event: EventCardModel? { model.events.first { $0.id == model.selectedEventID } }
+    private var event: EventCardModel? { model.selectedEvent }
 
     var body: some View {
         if let event {
@@ -29,18 +29,25 @@ struct EventDetailView: View {
                     eventSummary(event)
                 }
             }
-            .onAppear { model.setEventRead(event) }
-            .task(id: event.id) {
-                async let loadedEvidence = model.evidence(for: event.id)
+            .id(event.revisionID)
+            .task(id: event.revisionID) {
+                model.setEventRead(event)
+                readingPrimary = false
+                perspectiveSynthesis = ""
+                perspectiveSynthesisStatus = ""
+                async let loadedEvidence = model.evidence(for: event.id, revisionID: event.revisionID)
                 async let loadedHistory = model.revisionHistory(for: event.id)
-                async let loadedCoverage = model.coverageComparison(for: event.id)
-                evidence = await loadedEvidence
-                history = await loadedHistory
-                coverage = await loadedCoverage
+                async let loadedCoverage = model.coverageComparison(for: event.id, revisionID: event.revisionID)
+                let loaded = await (loadedEvidence, loadedHistory, loadedCoverage)
+                guard !Task.isCancelled else { return }
+                evidence = loaded.0
+                history = loaded.1
+                coverage = loaded.2
             }
             .toolbar {
                 if event.sourceCount > 1 && !readingPrimary {
                     ToolbarItemGroup {
+                    Button("Back", systemImage: "chevron.left") { model.closeEvent() }
                     Button { model.toggleSaved(event) } label: {
                         Label(model.savedEventIDs.contains(event.id) ? "Saved" : "Save", systemImage: model.savedEventIDs.contains(event.id) ? "bookmark.fill" : "bookmark")
                     }
@@ -48,7 +55,6 @@ struct EventDetailView: View {
                     Menu {
                         Button("This article doesn’t belong in this story") { Task { await model.splitPrimaryMembership(event) } }
                         Button("These are the same story…") { choosingMergeTarget = true }
-                        Button("Move this article to another story…") { choosingMergeTarget = true }
                     } label: {
                         Label("Fix story grouping…", systemImage: "ellipsis.circle")
                     }
@@ -98,13 +104,15 @@ struct EventDetailView: View {
                 DisclosureGroup {
                     VStack(spacing: 10) {
                         ForEach(evidence) { assertion in
-                            EvidenceRow(source: assertion.sourceName, title: assertion.title, text: assertion.excerpt, metadata: evidenceMetadata(assertion))
+                            Button { Task { await model.openEvidence(assertion) } } label: {
+                                EvidenceRow(source: assertion.sourceName, title: assertion.title, text: assertion.excerpt, metadata: evidenceMetadata(assertion))
+                            }.buttonStyle(.plain).help("Read this source")
                         }
                     }.padding(.top, 10)
                 } label: {
-                    Text("\(event.independentSourceCount) independent sources · \(event.sourceCount) items").font(.headline)
+                    Text("\(event.independentSourceCount) independent sources · \(Set(evidence.map(\.itemRevisionID)).count) items").font(.headline)
                 }
-                let meaningfulHistory = history.filter { $0.changeKind.isReaderVisible }.dropFirst()
+                let meaningfulHistory = history.filter { $0.changeKind.isReaderVisible && $0.changeKind != .initial }
                 if !meaningfulHistory.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Important updates").font(.title2.bold())
@@ -127,6 +135,7 @@ struct EventDetailView: View {
                         if model.providerConfigured {
                             Button("Generate cited perspective synthesis") { Task { await generatePerspectiveSynthesis(event) } }
                             if !perspectiveSynthesis.isEmpty { Text(perspectiveSynthesis).textSelection(.enabled) }
+                            if !perspectiveSynthesisStatus.isEmpty { Text(perspectiveSynthesisStatus).font(.caption).foregroundStyle(.secondary) }
                         }
                     }
                 }
@@ -159,11 +168,11 @@ struct EventDetailView: View {
     }
 
     private func evidenceMetadata(_ assertion: StoredEventEvidence) -> String {
-        let primary = assertion.isPrimary ? String(localized: "Primary") : assertion.role.rawValue.capitalized
+        let primary = assertion.isPrimary ? String(localized: "Primary") : NSLocalizedString(assertion.role.rawValue.capitalized, comment: "Evidence membership role")
         if let publishedAt = assertion.publishedAt {
-            return "\(primary) evidence · \(publishedAt.formatted(date: .abbreviated, time: .omitted))"
+            return String(localized: "\(primary) evidence · \(publishedAt.formatted(date: .abbreviated, time: .omitted))")
         }
-        return "\(primary) evidence"
+        return String(localized: "\(primary) evidence")
     }
 
     private func generatePerspectiveSynthesis(_ event: EventCardModel) async {
@@ -222,6 +231,7 @@ private extension RevisionChangeKind {
 
 private struct ReaderPane: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var event: EventCardModel
     var evidence: [StoredEventEvidence]
     var backAction: () -> Void
@@ -253,6 +263,8 @@ private struct ReaderPane: View {
                 } label: { Image(systemName: "ellipsis.circle") }
                 Button { model.toggleFocusReading() } label: { Image(systemName: model.focusReading ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }
                     .help(model.focusReading ? "Exit Focus Reading" : "Focus Reading (⇧⌘F)")
+                    .accessibilityLabel(model.focusReading ? "Exit Focus Reading" : "Focus Reading")
+                    .accessibilityIdentifier("reader-focus-toggle")
             }.padding(.horizontal, 12).frame(height: model.focusReading ? 38 : 44)
             if selection != nil && !model.focusReading {
                 HStack(spacing: 8) {
@@ -280,7 +292,7 @@ private struct ReaderPane: View {
             Divider()
             HStack(spacing: 0) {
                 ReaderWebView(
-                    document: ReaderDocument(id: event.revisionID.description, title: event.title, byline: event.primarySource, sanitizedHTML: event.bodyHTML, itemRevisionID: event.primaryItemRevisionID),
+                    document: ReaderDocument(id: event.revisionID.description, title: event.title, byline: event.primarySource, sanitizedHTML: event.bodyHTML, baseURL: event.originalURL, itemRevisionID: event.primaryItemRevisionID),
                     selection: $selection,
                     activatedLink: $activatedLink,
                     focusRequest: readerFocusRequest,
@@ -300,12 +312,17 @@ private struct ReaderPane: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
-            .animation(.easeInOut(duration: 0.18), value: model.readerInsights?.id)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.readerInsights?.id)
         }
         .task(id: activatedLink) {
             guard let activatedLink else { linkPreview = nil; return }
-            do { linkPreview = try await previewFetcher.preview(for: activatedLink) }
+            do {
+                let preview = try await previewFetcher.preview(for: activatedLink)
+                guard !Task.isCancelled else { return }
+                linkPreview = preview
+            } catch is CancellationError { return }
             catch {
+                guard !Task.isCancelled else { return }
                 model.presentReaderInsights(ReaderInsightsState(
                     kind: .linkPreview,
                     title: String(localized: "Link preview unavailable"),

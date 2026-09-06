@@ -28,11 +28,13 @@ public actor EvidenceEventMaintainer {
     }
 
     public func run(limit: Int = 250) async throws -> EvidenceMaintenanceResult {
+        _ = try await repository.coalesceAutomaticArticleEvents()
         _ = try await deduplication.run(limit: max(500, limit * 4))
         let pending = try await repository.pendingEvidenceSegments(limit: limit)
         guard !pending.isEmpty else { return EvidenceMaintenanceResult() }
         let constraints = try await repository.activeConstraints()
         var aggregates = try await repository.currentEventAggregates(limit: 2_000)
+        var revisionItems = try await repository.itemIDs(revisionIDs: Set(aggregates.flatMap { $0.memberships.map(\.itemRevisionID) }))
         var signalCache: [EventID: StoredClusteringSignals] = [:]
         for aggregate in aggregates {
             signalCache[aggregate.event.id] = try await repository.clusteringSignals(eventRevisionID: aggregate.revision.id)
@@ -40,7 +42,9 @@ public actor EvidenceEventMaintainer {
         var result = EvidenceMaintenanceResult(evidenceSegments: pending.count)
 
         for evidence in pending {
-            let scores = aggregates.map { candidateScore(evidence: evidence, event: $0, signals: signalCache[$0.event.id] ?? StoredClusteringSignals()) }
+            revisionItems[evidence.itemRevision.id] = evidence.itemID
+            let sameItemRevisions = Set(revisionItems.filter { $0.value == evidence.itemID }.map(\.key))
+            let scores = aggregates.map { candidateScore(evidence: evidence, event: $0, signals: signalCache[$0.event.id] ?? StoredClusteringSignals(), sameItemRevisions: sameItemRevisions) }
             let assignment = DeterministicClusteringEngine.assign(
                 segmentLineageID: evidence.segment.lineageID,
                 candidates: scores,
@@ -59,7 +63,7 @@ public actor EvidenceEventMaintainer {
             var committed = false
             for eventID in assignment.eventIDs {
                 guard let index = aggregates.firstIndex(where: { $0.event.id == eventID }) else { continue }
-                let updated = try await append(evidence, to: aggregates[index], forced: assignment.wasForcedByUser)
+                let updated = try await append(evidence, to: aggregates[index], forced: assignment.wasForcedByUser, sameItemRevisions: sameItemRevisions)
                 aggregates[index] = updated
                 signalCache[eventID] = try await repository.clusteringSignals(eventRevisionID: updated.revision.id)
                 result.eventRevisionsCreated += 1
@@ -104,8 +108,10 @@ public actor EvidenceEventMaintainer {
         return StoredEventAggregate(event: event, revision: revision, memberships: [membership])
     }
 
-    private func append(_ evidence: PendingEvidenceSegment, to aggregate: StoredEventAggregate, forced: Bool) async throws -> StoredEventAggregate {
+    private func append(_ evidence: PendingEvidenceSegment, to aggregate: StoredEventAggregate, forced: Bool, sameItemRevisions: Set<ItemRevisionID>) async throws -> StoredEventAggregate {
         let sourceAlreadyPresent = aggregate.memberships.contains { $0.independenceGroup == evidence.independenceGroup }
+        let superseded = aggregate.memberships.filter { $0.segmentLineageID == evidence.segment.lineageID && sameItemRevisions.contains($0.itemRevisionID) }
+        let supersededIDs = Set(superseded.map(\.id))
         let membership = EventMembershipAssertion(
             eventID: aggregate.event.id,
             itemRevisionID: evidence.itemRevision.id,
@@ -116,26 +122,32 @@ public actor EvidenceEventMaintainer {
             confidence: forced ? .certain : Confidence(0.78),
             identityWeight: forced ? 1.5 : 1,
             independenceGroup: evidence.independenceGroup,
-            provenance: forced ? .user : .deterministic
+            provenance: forced ? .user : .deterministic,
+            supersedesID: superseded.last?.id
         )
-        let memberships = aggregate.memberships + [membership]
+        let memberships = aggregate.memberships.filter { !supersededIDs.contains($0.id) } + [membership]
         let changeKind: RevisionChangeKind
         switch evidence.itemRevision.changeKind {
         case .majorUpdate, .correction: changeKind = evidence.itemRevision.changeKind
         default: changeKind = sourceAlreadyPresent ? .contentUpdate : .majorUpdate
         }
         let summary = aggregate.revision.summary.isEmpty ? providerFreeSummary(evidence) : aggregate.revision.summary
-        let primary = try await selectPrimary(
-            evidence: evidence,
-            newMembershipID: membership.id,
-            currentMembershipID: aggregate.revision.primaryMembershipAssertionID,
-            existingTrace: aggregate.revision.primaryReasonTrace
-        )
+        let primary: (membershipID: MembershipAssertionID, reasons: [String], selectedNew: Bool)
+        if superseded.contains(where: { $0.id == aggregate.revision.primaryMembershipAssertionID }) {
+            primary = (membership.id, aggregate.revision.primaryReasonTrace, true)
+        } else {
+            primary = try await selectPrimary(
+                evidence: evidence,
+                newMembershipID: membership.id,
+                currentMembershipID: aggregate.revision.primaryMembershipAssertionID,
+                existingTrace: aggregate.revision.primaryReasonTrace
+            )
+        }
         let revision = EventRevision(
             eventID: aggregate.event.id,
             ordinal: aggregate.revision.ordinal + 1,
             title: primary.selectedNew ? evidence.itemRevision.title : aggregate.revision.title,
-            summary: summary,
+            summary: primary.selectedNew ? providerFreeSummary(evidence) : summary,
             startedAt: minDate(aggregate.revision.startedAt, evidence.itemRevision.publishedAt ?? evidence.itemRevision.fetchedAt),
             endedAt: maxDate(aggregate.revision.endedAt, evidence.itemRevision.modifiedAt ?? evidence.itemRevision.publishedAt ?? evidence.itemRevision.fetchedAt),
             changeKind: changeKind,
@@ -217,7 +229,15 @@ public actor EvidenceEventMaintainer {
         return reasons.isEmpty ? ["most direct available evidence"] : reasons
     }
 
-    private func candidateScore(evidence: PendingEvidenceSegment, event: StoredEventAggregate, signals: StoredClusteringSignals) -> EventCandidateScore {
+    private func candidateScore(evidence: PendingEvidenceSegment, event: StoredEventAggregate, signals: StoredClusteringSignals, sameItemRevisions: Set<ItemRevisionID>) -> EventCandidateScore {
+        // Sections of one article are evidence spans, not separate copies of
+        // the article's Event. A later revision also follows its stable lineage.
+        // The assignment engine still applies user splits and rejections first.
+        if event.memberships.contains(where: {
+            $0.itemRevisionID == evidence.itemRevision.id || ($0.segmentLineageID == evidence.segment.lineageID && sameItemRevisions.contains($0.itemRevisionID))
+        }) {
+            return EventCandidateScore(eventID: event.event.id, semantic: 1, entityOverlap: 1, topicOverlap: 1, temporal: 1, title: 1, citation: 1, independence: 1, coherence: 1, memberLineages: Set(event.memberships.map(\.segmentLineageID)))
+        }
         let segmentSimilarity = similarity(evidence.segment.text, event.revision.summary + " " + event.revision.title)
         let titleSimilarity = similarity(evidence.itemRevision.title, event.revision.title)
         let referenceDate = evidence.itemRevision.publishedAt ?? evidence.itemRevision.fetchedAt

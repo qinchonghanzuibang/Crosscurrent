@@ -357,7 +357,11 @@ public actor CrosscurrentRepository {
         isInitialBackfill: Bool = false,
         idempotencyKey: String? = nil
     ) throws -> Bool {
-        try mutate(domains: [.items, .searchInputs], idempotencyKey: idempotencyKey) { db in
+        guard revision.itemID == item.id, item.currentRevisionID == revision.id,
+              segments.allSatisfy({ $0.itemRevisionID == revision.id }) else {
+            throw CrosscurrentStorageError.invalidStagedData
+        }
+        return try mutate(domains: [.items, .searchInputs], idempotencyKey: idempotencyKey) { db in
             try db.execute(
                 sql: """
                 INSERT INTO items
@@ -373,7 +377,7 @@ public actor CrosscurrentRepository {
             }
             try db.execute(
                 sql: """
-                INSERT OR IGNORE INTO item_revisions
+                INSERT INTO item_revisions
                   (id, item_id, ordinal, title, author, published_at, modified_at, fetched_at, language_code,
                    plain_text, sanitized_html_blob_id, evidence_blob_id, content_hash, extraction_state, revision_reason,
                    acquisition_provenance)
@@ -387,7 +391,7 @@ public actor CrosscurrentRepository {
             for (ordinal, segment) in segments.enumerated() {
                 try db.execute(
                     sql: """
-                    INSERT OR REPLACE INTO item_segments
+                    INSERT INTO item_segments
                       (id, item_revision_id, lineage_id, ordinal, kind, utf8_start, utf8_length, heading_path,
                        segment_hash, text, embedding_input)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -437,7 +441,11 @@ public actor CrosscurrentRepository {
         includedMembershipIDs: Set<MembershipAssertionID>? = nil,
         idempotencyKey: String? = nil
     ) throws -> Bool {
-        try mutate(domains: [.events, .searchInputs], idempotencyKey: idempotencyKey) { db in
+        guard revision.eventID == event.id, event.currentRevisionID == revision.id,
+              memberships.allSatisfy({ $0.eventID == event.id }) else {
+            throw CrosscurrentStorageError.invalidStagedData
+        }
+        return try mutate(domains: [.events, .searchInputs], idempotencyKey: idempotencyKey) { db in
             try db.execute(
                 sql: """
                 INSERT INTO events (id, current_revision_id, lifecycle_state, created_at, is_tombstoned)
@@ -460,7 +468,7 @@ public actor CrosscurrentRepository {
             }
             try db.execute(
                 sql: """
-                INSERT OR IGNORE INTO event_revisions
+                INSERT INTO event_revisions
                   (id, event_id, ordinal, title, summary, started_at, ended_at, change_kind,
                    primary_membership_assertion_id, score_snapshot_json, generation_metadata_json, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
@@ -569,7 +577,10 @@ public actor CrosscurrentRepository {
 
     @discardableResult
     public func saveDigest(_ digest: Digest, revision: DigestRevision, idempotencyKey: String? = nil) throws -> Bool {
-        try mutate(domains: [.digests], idempotencyKey: idempotencyKey) { db in
+        guard revision.digestID == digest.id, digest.currentRevisionID == revision.id else {
+            throw CrosscurrentStorageError.invalidStagedData
+        }
+        return try mutate(domains: [.digests], idempotencyKey: idempotencyKey) { db in
             let day = Self.dayFormatter.string(from: digest.briefingDay)
             try db.execute(
                 sql: """
@@ -579,13 +590,13 @@ public actor CrosscurrentRepository {
                 arguments: [digest.id.description, day, revision.id.description]
             )
             try db.execute(
-                sql: "INSERT OR IGNORE INTO digest_revisions (id, digest_id, parent_revision_id, reason, ranking_snapshot_json, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
+                sql: "INSERT INTO digest_revisions (id, digest_id, parent_revision_id, reason, ranking_snapshot_json, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
                 arguments: [revision.id.description, digest.id.description, revision.parentRevisionID?.description, revision.reason.rawValue, revision.createdAt.timeIntervalSince1970]
             )
             for entry in revision.entries {
                 let explanation = try encoder.encode(entry.explanation)
                 try db.execute(
-                    sql: "INSERT OR REPLACE INTO digest_entries (id, digest_revision_id, event_revision_id, section, rank, score, explanation_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    sql: "INSERT INTO digest_entries (id, digest_revision_id, event_revision_id, section, rank, score, explanation_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     arguments: [entry.id.uuidString.lowercased(), revision.id.description, entry.eventRevisionID.description, entry.section.rawValue, entry.rank, entry.score, explanation]
                 )
             }
@@ -603,6 +614,25 @@ public actor CrosscurrentRepository {
                 """,
                 arguments: [blob.id.description, blob.sha256, blob.relativePath, blob.byteCount, blob.mediaType, blob.retentionClass.rawValue, blob.createdAt.timeIntervalSince1970]
             )
+        }
+    }
+
+    func storeBlob(_ blob: StoredBlob, contents: Data) throws {
+        // Share the GC writer transaction across file creation and registration.
+        // Repeated puts renew quarantine, so subsequent evidence attachment has
+        // the full grace period even when this content was previously orphaned.
+        _ = try mutate(domains: [.blobs]) { db in
+            let manager = FileManager.default
+            let destination = database.locations.blobs.appending(path: blob.relativePath)
+            try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if !manager.fileExists(atPath: destination.path) {
+                try contents.write(to: destination, options: [.atomic, .completeFileProtectionUnlessOpen])
+            }
+            try db.execute(sql: """
+                INSERT INTO blobs (id, sha256, relative_path, byte_count, media_type, retention_class, created_at, quarantined_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(id) DO UPDATE SET quarantined_at=NULL
+                """, arguments: [blob.id.description, blob.sha256, blob.relativePath, blob.byteCount, blob.mediaType, blob.retentionClass.rawValue, blob.createdAt.timeIntervalSince1970])
         }
     }
 
@@ -728,12 +758,15 @@ public actor CrosscurrentRepository {
     @discardableResult
     public func markEventSeen(eventID: EventID, revisionID: EventRevisionID, ordinal: Int, at date: Date = .now) throws -> Bool {
         try mutate(domains: [.readState]) { db in
+            let valid = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM event_revisions WHERE id=? AND event_id=? AND ordinal=?)", arguments: [revisionID.description, eventID.description, ordinal]) ?? false
+            guard valid else { throw CrosscurrentStorageError.invalidStagedData }
             try db.execute(
                 sql: """
                 INSERT INTO event_read_states (event_id, last_seen_event_revision_id, last_seen_ordinal, last_seen_at, manual_unread)
                 VALUES (?, ?, ?, ?, 0)
                 ON CONFLICT(event_id) DO UPDATE SET last_seen_event_revision_id=excluded.last_seen_event_revision_id,
                   last_seen_ordinal=excluded.last_seen_ordinal, last_seen_at=excluded.last_seen_at, manual_unread=0
+                WHERE excluded.last_seen_ordinal >= COALESCE(event_read_states.last_seen_ordinal, 0)
                 """,
                 arguments: [eventID.description, revisionID.description, ordinal, date.timeIntervalSince1970]
             )
@@ -820,7 +853,7 @@ public actor CrosscurrentRepository {
         }
     }
 
-    public func eventEvidence(eventID: EventID) throws -> [StoredEventEvidence] {
+    public func eventEvidence(eventID: EventID, revisionID: EventRevisionID? = nil) throws -> [StoredEventEvidence] {
         try database.pool.read { db in
             try Row.fetchAll(
                 db,
@@ -830,7 +863,7 @@ public actor CrosscurrentRepository {
                        seg.utf8_start, seg.utf8_length, seg.segment_hash, seg.text,
                        sr.display_name AS source_name
                 FROM events e
-                JOIN event_revisions er ON er.id=e.current_revision_id
+                JOIN event_revisions er ON er.event_id=e.id AND er.id=COALESCE(?, e.current_revision_id)
                 JOIN event_revision_memberships rm ON rm.event_revision_id=er.id
                 JOIN event_membership_assertions m ON m.id=rm.membership_assertion_id
                 JOIN item_revisions ir ON ir.id=m.item_revision_id
@@ -842,7 +875,7 @@ public actor CrosscurrentRepository {
                 ORDER BY CASE WHEN m.id=er.primary_membership_assertion_id THEN 0 ELSE 1 END,
                          COALESCE(ir.published_at, ir.fetched_at), m.created_at
                 """,
-                arguments: [eventID.description]
+                arguments: [revisionID?.description, eventID.description]
             ).map { row in
                 guard
                     let id = Self.identifier(MembershipAssertionID.self, row["id"]),
@@ -867,6 +900,39 @@ public actor CrosscurrentRepository {
                     isPrimary: (row["primary_membership_assertion_id"] as String?) == id.description
                 )
             }
+        }
+    }
+
+    /// Every exact evidence revision must resolve before a cloud operation can
+    /// proceed. Endpoint and Source classifications are combined conservatively.
+    public func aiClassifications(itemRevisionIDs: Set<ItemRevisionID>) throws -> [SourceAIClassification] {
+        guard !itemRevisionIDs.isEmpty else { return [] }
+        return try database.pool.read { db in
+            let ids = itemRevisionIDs.map(\.description).sorted()
+            let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT ir.id, i.source_id, ep.access_requirement, ep.content_privacy,
+                       c.id AS classification_id, c.access_requirement AS source_access, c.content_privacy AS source_privacy
+                FROM item_revisions ir JOIN items i ON i.id=ir.item_id
+                JOIN source_endpoints ep ON ep.id=i.endpoint_id
+                LEFT JOIN source_ai_classifications c ON c.id=(
+                  SELECT id FROM source_ai_classifications WHERE source_id=i.source_id AND is_current=1
+                  ORDER BY created_at DESC LIMIT 1)
+                WHERE ir.id IN (\(placeholders))
+                """, arguments: StatementArguments(ids))
+            guard rows.count == ids.count else { throw CrosscurrentStorageError.invalidStagedData }
+            let privacyOrder: [ContentPrivacy: Int] = [.public: 0, .private: 1, .restricted: 2, .unknown: 3]
+            var bySource: [SourceID: SourceAIClassification] = [:]
+            for row in rows {
+                guard let sourceID = Self.identifier(SourceID.self, row["source_id"]) else { throw CrosscurrentStorageError.corruptRecord("AI evidence Source") }
+                let endpointPrivacy = ContentPrivacy(rawValue: row["content_privacy"]) ?? .unknown
+                let sourcePrivacy = (row["source_privacy"] as String?).flatMap(ContentPrivacy.init(rawValue:)) ?? endpointPrivacy
+                let previous = bySource[sourceID]
+                let privacy = [endpointPrivacy, sourcePrivacy, previous?.contentPrivacy].compactMap { $0 }.max { privacyOrder[$0, default: 3] < privacyOrder[$1, default: 3] } ?? .unknown
+                let authenticated = (row["access_requirement"] as String) == "authenticated" || (row["source_access"] as String?) == "authenticated" || previous?.accessRequirement == .authenticated
+                bySource[sourceID] = SourceAIClassification(id: (row["classification_id"] as String?).flatMap(UUID.init(uuidString:)) ?? sourceID.rawValue, sourceID: sourceID, accessRequirement: authenticated ? .authenticated : .anonymous, contentPrivacy: privacy, provenance: .deterministic, confidence: .certain)
+            }
+            return bySource.values.sorted { $0.sourceID.description < $1.sourceID.description }
         }
     }
 
@@ -915,6 +981,11 @@ public actor CrosscurrentRepository {
         try mutateValue(domains: [.jobs]) { db in
             let weChatSource = try String.fetchOne(db, sql: "SELECT source_id FROM source_endpoints WHERE id=? AND connector_kind='weChatOfficialAccount'", arguments: [endpointID.description])
             let groupingKey = weChatSource.map { "wechat-source:" + $0 } ?? endpointID.description
+            if !manual, let suspended = try Row.fetchOne(db,
+                sql: "SELECT * FROM jobs WHERE id=(SELECT id FROM jobs WHERE kind='refresh' AND input_hash=? ORDER BY created_at DESC, rowid DESC LIMIT 1) AND state='cancelled' AND next_attempt_at>?",
+                arguments: [groupingKey, now.timeIntervalSince1970]) {
+                return try Self.decodeJob(row: suspended)
+            }
             if let row = try Row.fetchOne(
                 db,
                 sql: "SELECT * FROM jobs WHERE kind=? AND input_hash=? AND state IN ('pending','leased','failed') ORDER BY CASE state WHEN 'leased' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1",
@@ -1068,11 +1139,11 @@ public actor CrosscurrentRepository {
     }
 
     @discardableResult
-    public func suspendJob(_ lease: JobLease, failureClass: String, checkpoint: Data? = nil) throws -> Bool {
+    public func suspendJob(_ lease: JobLease, failureClass: String, checkpoint: Data? = nil, retryAt: Date? = nil) throws -> Bool {
         try mutate(domains: [.jobs]) { db in
             let valid = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM job_leases WHERE job_id=? AND owner=? AND token=?", arguments: [lease.jobID.description, lease.owner, lease.token.uuidString.lowercased()]) ?? 0
             guard valid == 1 else { throw CrosscurrentStorageError.jobLeaseUnavailable }
-            try db.execute(sql: "UPDATE jobs SET state='cancelled', retry_class=?, checkpoint=?, updated_at=? WHERE id=?", arguments: [failureClass, checkpoint, Date.now.timeIntervalSince1970, lease.jobID.description])
+            try db.execute(sql: "UPDATE jobs SET state='cancelled', retry_class=?, checkpoint=?, next_attempt_at=?, updated_at=? WHERE id=?", arguments: [failureClass, checkpoint, (retryAt ?? .distantFuture).timeIntervalSince1970, Date.now.timeIntervalSince1970, lease.jobID.description])
             try db.execute(sql: "DELETE FROM job_leases WHERE job_id=?", arguments: [lease.jobID.description])
         }
     }
@@ -1319,6 +1390,89 @@ public actor CrosscurrentRepository {
         }
     }
 
+    /// Repairs the former one-Event-per-section behavior only for automatic
+    /// Events containing a single exact article revision. User decisions and
+    /// all historical evidence memberships remain untouched.
+    public func coalesceAutomaticArticleEvents() throws -> Int {
+        let groups = try database.pool.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT e.id, MIN(m.item_revision_id) AS article_revision
+                FROM events e JOIN event_revision_memberships rm ON rm.event_revision_id=e.current_revision_id
+                JOIN event_membership_assertions m ON m.id=rm.membership_assertion_id
+                WHERE e.lifecycle_state='active' AND e.is_tombstoned=0
+                GROUP BY e.id HAVING COUNT(DISTINCT m.item_revision_id)=1
+                  AND SUM(m.provenance='user')=0
+                """).reduce(into: [String: [String]]()) { $0[$1["article_revision"], default: []].append($1["id"]) }
+        }
+        var merged = 0
+        for (_, ids) in groups where ids.count > 1 {
+            let result = try mutateValue(domains: [.events, .searchInputs]) { db -> Int in
+                let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+                let events = try Row.fetchAll(db, sql: "SELECT e.id AS stable_id, e.created_at AS event_created_at, r.* FROM events e JOIN event_revisions r ON r.id=e.current_revision_id WHERE e.id IN (\(placeholders)) AND e.lifecycle_state='active' AND e.is_tombstoned=0 ORDER BY EXISTS(SELECT 1 FROM saved_entries se WHERE se.target_kind='event' AND se.target_id=e.id) DESC, e.created_at, e.id", arguments: StatementArguments(ids))
+                guard events.count == ids.count, let survivor = events.first,
+                      let survivingID = Self.identifier(EventID.self, survivor["stable_id"]) else { return 0 }
+                var all: [EventMembershipAssertion] = []
+                for row in events {
+                    guard let revisionID = Self.identifier(EventRevisionID.self, row["id"]) else { throw CrosscurrentStorageError.corruptRecord("Event revision") }
+                    all += try Self.memberships(eventRevisionID: revisionID, db: db)
+                }
+                guard Set(all.map(\.itemRevisionID)).count == 1, all.allSatisfy({ $0.provenance != .user }) else { return 0 }
+                let constraints = try Row.fetchAll(db, sql: "SELECT event_id, left_lineage_id, right_lineage_id FROM clustering_constraints WHERE is_active=1")
+                let lineages = Set(all.map { $0.segmentLineageID.description })
+                guard !constraints.contains(where: { row in
+                    (row["event_id"] as String?).map(ids.contains) == true || lineages.contains(row["left_lineage_id"] as String) || (row["right_lineage_id"] as String?).map(lineages.contains) == true
+                }) else { return 0 }
+                let savedCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM saved_entries WHERE target_kind='event' AND target_id IN (\(placeholders))", arguments: StatementArguments(ids)) ?? 0
+                guard savedCount <= 1 else { return 0 }
+                let prior = try Self.decodeEventRevision(row: survivor)
+                let revisionID = EventRevisionID()
+                var membershipIDs: [String] = []
+                var includedSegments = Set<ItemSegmentID>()
+                for membership in all {
+                    if membership.eventID == survivingID {
+                        includedSegments.insert(membership.itemSegmentID)
+                        membershipIDs.append(membership.id.description)
+                        continue
+                    }
+                    guard includedSegments.insert(membership.itemSegmentID).inserted else { continue }
+                    let cloneID = MembershipAssertionID()
+                    try db.execute(sql: """
+                        INSERT INTO event_membership_assertions
+                        SELECT ?, ?, item_revision_id, item_segment_id, segment_lineage_id, decision, role,
+                               confidence, identity_weight, independence_group, provenance, id, ?
+                        FROM event_membership_assertions WHERE id=?
+                        """, arguments: [cloneID.description, survivingID.description, Date.now.timeIntervalSince1970, membership.id.description])
+                    membershipIDs.append(cloneID.description)
+                }
+                try db.execute(sql: """
+                    INSERT INTO event_revisions
+                    SELECT ?, event_id, ordinal+1, title, summary, started_at, ended_at, 'merge',
+                           primary_membership_assertion_id, score_snapshot_json, generation_metadata_json, ?
+                    FROM event_revisions WHERE id=?
+                    """, arguments: [revisionID.description, Date.now.timeIntervalSince1970, prior.id.description])
+                for id in membershipIDs {
+                    try db.execute(sql: "INSERT INTO event_revision_memberships VALUES (?, ?)", arguments: [revisionID.description, id])
+                }
+                let topics = try Row.fetchAll(db, sql: "SELECT topic_id, MAX(confidence) AS confidence FROM event_topic_assertions WHERE event_revision_id IN (SELECT current_revision_id FROM events WHERE id IN (\(placeholders))) GROUP BY topic_id", arguments: StatementArguments(ids))
+                for topic in topics {
+                    try db.execute(sql: "INSERT INTO event_topic_assertions VALUES (?, ?, ?, ?, 'deterministic', NULL)", arguments: [UUID().uuidString.lowercased(), revisionID.description, topic["topic_id"] as String, topic["confidence"] as Double])
+                }
+                try db.execute(sql: "UPDATE events SET current_revision_id=? WHERE id=?", arguments: [revisionID.description, survivingID.description])
+                try Self.upsertSearchInput(stableID: survivingID.description, kind: "event", revisionID: revisionID.description, languageCode: nil, title: prior.title, body: prior.summary, inputHash: HTTPMetadataRedactor.digest(Data((prior.title + prior.summary).utf8)), db: db)
+                let operationID = UUID().uuidString.lowercased()
+                try db.execute(sql: "INSERT INTO event_lineage_operations VALUES (?, 'merge', ?, ?, ?, ?)", arguments: [operationID, prior.id.description, try encoder.encode([survivingID.description]), try encoder.encode([String: Double]()), Date.now.timeIntervalSince1970])
+                for losing in ids where losing != survivingID.description {
+                    try db.execute(sql: "UPDATE events SET lifecycle_state='merged' WHERE id=?", arguments: [losing])
+                    try db.execute(sql: "INSERT INTO event_aliases VALUES (?, ?, ?)", arguments: [losing, survivingID.description, operationID])
+                    try db.execute(sql: "DELETE FROM search_inputs WHERE kind='event' AND stable_id=?", arguments: [losing])
+                }
+                return ids.count - 1
+            }
+            merged += result ?? 0
+        }
+        return merged
+    }
+
     public func clusteringSignals(eventRevisionID: EventRevisionID) throws -> StoredClusteringSignals {
         try database.pool.read { db in
             let entityValues = try String.fetchAll(
@@ -1380,9 +1534,9 @@ public actor CrosscurrentRepository {
         }
     }
 
-    public func coverageComparison(eventID: EventID) throws -> StoredCoverageComparison {
+    public func coverageComparison(eventID: EventID, revisionID: EventRevisionID? = nil) throws -> StoredCoverageComparison {
         try database.pool.read { db in
-            guard let currentRevision: String = try String.fetchOne(db, sql: "SELECT current_revision_id FROM events WHERE id=?", arguments: [eventID.description]) else {
+            guard let currentRevision: String = try String.fetchOne(db, sql: "SELECT r.id FROM events e JOIN event_revisions r ON r.event_id=e.id AND r.id=COALESCE(?, e.current_revision_id) WHERE e.id=?", arguments: [revisionID?.description, eventID.description]) else {
                 return StoredCoverageComparison()
             }
             let rows = try Row.fetchAll(
@@ -1429,16 +1583,38 @@ public actor CrosscurrentRepository {
     }
 
     public func currentEventSnapshots(limit: Int = 500) throws -> [StoredEventSnapshot] {
-        try database.pool.read { db in
+        try eventSnapshots(limit: max(1, min(limit, 2_000)), revisionIDs: nil, eventIDs: nil)
+    }
+
+    public func currentEventSnapshots(eventIDs: Set<EventID>) throws -> [StoredEventSnapshot] {
+        guard !eventIDs.isEmpty else { return [] }
+        return try eventSnapshots(limit: eventIDs.count, revisionIDs: nil, eventIDs: eventIDs)
+    }
+
+    public func eventSnapshots(revisionIDs: Set<EventRevisionID>) throws -> [StoredEventSnapshot] {
+        guard !revisionIDs.isEmpty else { return [] }
+        return try eventSnapshots(limit: revisionIDs.count, revisionIDs: revisionIDs, eventIDs: nil)
+    }
+
+    private func eventSnapshots(limit: Int, revisionIDs: Set<EventRevisionID>?, eventIDs: Set<EventID>?) throws -> [StoredEventSnapshot] {
+        let ids = revisionIDs?.map(\.description).sorted() ?? eventIDs?.map(\.description).sorted()
+        let filter: String
+        if let ids {
+            let column = revisionIDs == nil ? "e.id" : "r.id"
+            filter = " AND \(column) IN (" + Array(repeating: "?", count: ids.count).joined(separator: ",") + ")"
+        } else { filter = "" }
+        let join = revisionIDs == nil ? "r.id=e.current_revision_id" : "r.event_id=e.id"
+        let lifecycle = revisionIDs == nil ? " AND e.lifecycle_state='active'" : ""
+        return try database.pool.read { db in
             let eventRows = try Row.fetchAll(
                 db,
                 sql: """
-                SELECT e.id AS stable_event_id, e.created_at AS event_created_at, e.is_tombstoned, r.*
-                FROM events e JOIN event_revisions r ON r.id=e.current_revision_id
-                WHERE e.is_tombstoned=0 AND e.lifecycle_state='active'
+                SELECT e.id AS stable_event_id, e.created_at AS event_created_at, e.is_tombstoned, e.current_revision_id AS actual_current_revision_id, r.*
+                FROM events e JOIN event_revisions r ON \(join)
+                WHERE e.is_tombstoned=0\(lifecycle)\(filter)
                 ORDER BY COALESCE(r.ended_at, r.started_at, r.created_at) DESC LIMIT ?
                 """,
-                arguments: [max(1, min(limit, 2_000))]
+                arguments: StatementArguments(ids ?? []) + [limit]
             )
             return try eventRows.map { row in
                 guard let eventID = Self.identifier(EventID.self, row["stable_event_id"]) else { throw CrosscurrentStorageError.corruptRecord("Event") }
@@ -1595,7 +1771,7 @@ public actor CrosscurrentRepository {
                     return String(data: data, encoding: .utf8)
                 }()
                 let aggregate = StoredEventAggregate(
-                    event: Event(id: eventID, currentRevisionID: revision.id, createdAt: Date(timeIntervalSince1970: row["event_created_at"]), isTombstoned: false),
+                    event: Event(id: eventID, currentRevisionID: Self.identifier(EventRevisionID.self, row["actual_current_revision_id"]) ?? revision.id, createdAt: Date(timeIntervalSince1970: row["event_created_at"]), isTombstoned: false),
                     revision: revision,
                     memberships: memberships
                 )
@@ -2248,6 +2424,25 @@ public actor CrosscurrentRepository {
                     cursorFamily: row["cursor_family"],
                     itemCount: row["item_count"]
                 )
+            }
+        }
+    }
+
+    public func itemDetail(revisionID: ItemRevisionID) throws -> StoredItemDetail? {
+        let itemID = try database.pool.read { db in
+            Self.identifier(ItemID.self, try String.fetchOne(db, sql: "SELECT item_id FROM item_revisions WHERE id=?", arguments: [revisionID.description]))
+        }
+        guard let itemID else { return nil }
+        return try itemDetail(itemID: itemID, revisionID: revisionID.description)
+    }
+
+    public func itemIDs(revisionIDs: Set<ItemRevisionID>) throws -> [ItemRevisionID: ItemID] {
+        guard !revisionIDs.isEmpty else { return [:] }
+        let ids = revisionIDs.map(\.description).sorted()
+        let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+        return try database.pool.read { db in
+            try Row.fetchAll(db, sql: "SELECT id, item_id FROM item_revisions WHERE id IN (\(placeholders))", arguments: StatementArguments(ids)).reduce(into: [:]) { result, row in
+                if let revisionID = Self.identifier(ItemRevisionID.self, row["id"]), let itemID = Self.identifier(ItemID.self, row["item_id"]) { result[revisionID] = itemID }
             }
         }
     }
